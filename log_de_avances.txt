@@ -11,3 +11,4 @@ Implementación de React Native
 Configuración de navegación en la App
 Desarrollo del login de usuarios
 Validación de credenciales en backend
+Creación del panel de inventario
