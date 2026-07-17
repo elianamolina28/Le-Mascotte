@@ -8,3 +8,4 @@ Conexión de la base de datos con PHP
 Creación del CRUD de productos
 Maquetación de la pantalla de inicio
 Implementación de React Native
+Configuración de navegación en la App
