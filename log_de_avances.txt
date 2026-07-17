@@ -3,3 +3,4 @@ Configuración del archivo .gitignore
 Diseño de la base de datos
 Creación de la tabla de usuarios
 Implementación del módulo de registro
+Diseño del panel de productos
