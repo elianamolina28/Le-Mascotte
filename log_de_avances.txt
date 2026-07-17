@@ -14,3 +14,4 @@ Validación de credenciales en backend
 Creación del panel de inventario
 Integración de listado de mascotas
 Diseño de interfaz para citas
+Implementación de lógica de búsqueda
