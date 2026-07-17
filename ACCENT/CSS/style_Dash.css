@@ -1,0 +1,115 @@
+
+    :root {
+      --morado: #6a1b9a;
+      --rosa: #c2185b;
+      --amarillo: #ffcc00;
+      --verde: #4caf50;
+      --rojo: #f44336;
+      --azul: #2196f3;
+      --blanco: #ffffff;
+      --gris-claro: #f9f5fc;
+    }
+
+    body {
+      background: linear-gradient(135deg, #f8e1f0, #f3e8ff);
+      font-family: 'Segoe UI', sans-serif;
+      margin: 0;
+      padding: 0;
+      color: #333;
+      min-height: 100vh;
+    }
+
+    /* NAVBAR */
+    .top-nav {
+      background: white;
+      padding: 1rem 5%;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+      position: sticky;
+      top: 0;
+      z-index: 1000;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: bold;
+      color: var(--morado);
+      font-size: 1.4rem;
+      cursor: pointer;
+    }
+
+    .logo img { width: 40px; }
+
+    .nav-links { display: flex; gap: 20px; }
+    .nav-links a {
+      text-decoration: none;
+      color: #666;
+      font-weight: 500;
+      transition: 0.3s;
+      cursor: pointer;
+    }
+    .nav-links a:hover, .nav-links a.active { color: var(--rosa); }
+
+    .main-container { padding: 40px 5%; }
+    .view-section { display: none; }
+    .view-section.active { display: block; }
+
+    /* DASHBOARD CARDS */
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 30px; }
+    .module-card {
+      background: white;
+      padding: 30px;
+      border-radius: 20px;
+      text-align: center;
+      box-shadow: 0 10px 20px rgba(0,0,0,0.05);
+      transition: transform 0.3s;
+    }
+    .module-card:hover { transform: translateY(-10px); }
+    .module-card i { font-size: 3rem; color: var(--rosa); margin-bottom: 20px; }
+    
+    /* TABLAS */
+    .admin-table { width: 100%; border-collapse: collapse; background: white; border-radius: 15px; overflow: hidden; margin-top: 20px;}
+    .admin-table th { background: var(--morado); color: white; padding: 15px; }
+    .admin-table td { padding: 12px; border-bottom: 1px solid #eee; text-align: center; }
+    
+    /* BOTONES */
+    .btn { 
+      padding: 8px 15px; border-radius: 8px; border: none; cursor: pointer; 
+      font-weight: bold; transition: 0.3s; text-decoration: none; display: inline-flex; align-items: center; gap: 6px;
+    }
+    .btn-main { background: var(--amarillo); color: #333; }
+    .btn-add { background: var(--verde); color: white; }
+    .btn-danger { background: var(--rojo); color: white; }
+    .btn-edit { background: var(--azul); color: white; }
+    .btn-export { background: #217346; color: white; }
+    .btn-export:hover { background: #1a5c38; transform: translateY(-2px); box-shadow: 0 4px 8px rgba(33,115,70,0.3); }
+    .btn-export i { font-size: 1rem; }
+
+    .img-table { width: 45px; height: 45px; object-fit: cover; border-radius: 8px; }
+    .badge-role { padding: 4px 8px; border-radius: 5px; font-size: 0.75rem; color: white; font-weight: bold; }
+
+    /* MODAL ESTILOS */
+    .modal {
+      display: none; 
+      position: fixed; 
+      z-index: 2000; 
+      left: 0; top: 0; width: 100%; height: 100%; 
+      background-color: rgba(0,0,0,0.5);
+    }
+    .modal-content {
+      background-color: white;
+      margin: 5% auto;
+      padding: 25px;
+      border-radius: 15px;
+      width: 90%;
+      max-width: 500px;
+      box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+    }
+    .modal-header { border-bottom: 1px solid #eee; padding-bottom: 10px; margin-bottom: 20px; color: var(--morado); }
+    .form-group { margin-bottom: 15px; text-align: left; }
+    .form-group label { display: block; margin-bottom: 5px; font-weight: 500; }
+    .form-group input, .form-group select { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 8px; box-sizing: border-box; }

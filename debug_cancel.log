@@ -1,0 +1,14 @@
+2026-07-02 17:37:03 - INICIO cancel_order
+REQUEST: {"action":"cancel_order","pedido_id":"PED20260702051353333","user_id":"USR20260701063745754"}
+SESSION: []
+userId: 'USR20260701063745754'
+pedidoId: 'PED20260702051353333'
+userRole: cliente, isAdmin: false
+pedido encontrado: {"id_pedido":"PED20260702051353333","estado_pedido":"Pendiente","total_pedido":"15000.00"}
+2026-07-02 17:41:53 - INICIO cancel_order
+REQUEST: {"action":"cancel_order","pedido_id":"PED20260702174101948","user_id":"USR20260701063745754"}
+SESSION: []
+userId: 'USR20260701063745754'
+pedidoId: 'PED20260702174101948'
+userRole: cliente, isAdmin: false
+pedido encontrado: {"id_pedido":"PED20260702174101948","estado_pedido":"Pendiente","total_pedido":"87444.00"}
