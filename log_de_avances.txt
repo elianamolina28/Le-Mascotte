@@ -16,3 +16,4 @@ Integración de listado de mascotas
 Diseño de interfaz para citas
 Implementación de lógica de búsqueda
 Optimización de consultas SQL
+Corrección de estilos en el menú
