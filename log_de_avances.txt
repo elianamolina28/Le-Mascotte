@@ -1,3 +1,4 @@
 Estructura inicial del proyecto
 Configuración del archivo .gitignore
 Diseño de la base de datos
+Creación de la tabla de usuarios
