@@ -4,3 +4,4 @@ Diseño de la base de datos
 Creación de la tabla de usuarios
 Implementación del módulo de registro
 Diseño del panel de productos
+Conexión de la base de datos con PHP
