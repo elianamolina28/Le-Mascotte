@@ -1,0 +1,20 @@
+Estructura inicial del proyecto
+Configuración del archivo .gitignore
+Diseño de la base de datos
+Creación de la tabla de usuarios
+Implementación del módulo de registro
+Diseño del panel de productos
+Conexión de la base de datos con PHP
+Creación del CRUD de productos
+Maquetación de la pantalla de inicio
+Implementación de React Native
+Configuración de navegación en la App
+Desarrollo del login de usuarios
+Validación de credenciales en backend
+Creación del panel de inventario
+Integración de listado de mascotas
+Diseño de interfaz para citas
+Implementación de lógica de búsqueda
+Optimización de consultas SQL
+Corrección de estilos en el menú
+Finalización de la etapa productiva

@@ -160,7 +160,7 @@ const initialUsers: User[] = [];
 const ORDER_STATUSES = ['Pendiente', 'Preparando', 'Enviado', 'Entregado', 'Cancelado'];
 
 const XAMPP_PROJECT_PATH = 'Mocap%20Le%20Mascotte.V4.2.0';
-const CANDIDATE_HOSTS = ['localhost', '172.30.5.119', '172.30.5.119', '192.168.137.191', '10.0.2.2', '192.168.101.16'];
+const CANDIDATE_HOSTS = ['localhost', '192.168.1.93', '172.30.4.104', '192.168.137.191', '10.0.2.2', '192.168.101.16'];
 const API_HOST_STORAGE_KEY = 'lemascotte_api_host_admin_v2';
 
 const getApiUrlFromHost = (host: string) => `http://${host}/${XAMPP_PROJECT_PATH}/models/ajax_lemascotte.php`;
