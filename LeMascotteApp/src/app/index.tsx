@@ -123,7 +123,7 @@ const categoryTiles = [
 
 const money = (value: number) => `$${value.toLocaleString('es-CO')}`;
 
-const XAMPP_HOST = '192.168.137.191'; // Tu IP local (Wi-Fi)
+const XAMPP_HOST = '172.30.5.119'; // Tu IP local (Wi-Fi)
 const XAMPP_PROJECT_PATH = 'Mocap%20Le%20Mascotte.V4.2.0';
 
 const getApiUrl = () => {
