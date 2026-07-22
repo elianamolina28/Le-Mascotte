@@ -49,6 +49,10 @@ $editingProduct = $editingProduct ?? null;
 
     <section id="view-dash" class="view-section <?php echo $section === 'dash' ? 'active' : ''; ?>">
       <h1 style="text-align: center; color: var(--morado); margin-bottom: 40px;">Panel de Control de Inventario</h1>
+      <div style="display: flex; gap: 10px; justify-content: center; margin-bottom: 30px; flex-wrap: wrap;">
+        <a class="btn btn-export" href="../api/exportar_excel.php?tipo=productos" target="_blank"><i class="fa fa-file-excel"></i> Exportar Productos</a>
+        <a class="btn btn-export" href="../api/exportar_excel.php?tipo=inventario" target="_blank"><i class="fa fa-chart-simple"></i> Exportar Inventario</a>
+      </div>
       <div class="grid" style="display: flex; justify-content: center;">
         <div class="module-card" style="max-width: 400px;">
           <i class="fa fa-boxes-stacked"></i>
@@ -60,9 +64,12 @@ $editingProduct = $editingProduct ?? null;
     </section>
 
     <section id="view-productos" class="view-section <?php echo $section === 'productos' ? 'active' : ''; ?>">
-      <div style="display: flex; justify-content: space-between; align-items: center;">
+      <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
         <h2>Inventario de Productos</h2>
-        <a class="btn btn-add" href="?section=productos&product_form=new"><i class="fa fa-plus"></i> Nuevo Producto</a>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+          <a class="btn btn-export" href="../api/exportar_excel.php?tipo=productos" target="_blank"><i class="fa fa-file-excel"></i> Exportar Productos</a>
+          <a class="btn btn-add" href="?section=productos&product_form=new"><i class="fa fa-plus"></i> Nuevo Producto</a>
+        </div>
       </div>
       <div style="overflow-x: auto;">
         <table class="admin-table">

@@ -1,4 +1,9 @@
 ﻿<?php
+// Forzar limpieza de caché OPcache para desarrollo
+if (function_exists('opcache_reset')) {
+    opcache_reset();
+}
+
 // Suprimir errores de PHP que podrian romper el JSON de respuesta
 error_reporting(0);
 ini_set('display_errors', 0);
@@ -35,10 +40,10 @@ include_once __DIR__ . '/actividad_log.php';
 mysqli_set_charset($conexion, 'utf8mb4');
 
 // Entrada principal de AJAX. Este archivo solo recibe la accion y llama al modulo correspondiente.
-$requestBody = null;
+$GLOBALS['requestBody'] = null;
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $input = file_get_contents('php://input');
-    $requestBody = json_decode($input, true);
+    $GLOBALS['requestBody'] = json_decode($input, true);
 }
 
 $action = getValue('action');
@@ -137,7 +142,7 @@ if ($action === 'register') {
 
     $newId          = generateId('USR');
     $fullName       = "$name $last";
-    $role           = normalizeRole($roleInput);
+    $role           = 'Cliente';
     $hashedPassword = password_hash($password, PASSWORD_DEFAULT);
     $status         = 'Activo';
 
@@ -176,16 +181,120 @@ if ($action === 'update_profile') {
     }
 
     $name = getValue('name');
-    if (!$name) {
-        sendResponse(['success' => false, 'message' => 'El nombre no puede estar vacio.']);
+    $email = getValue('email');
+    $phone = getValue('phone');
+    $address = getValue('address');
+    $password = getValue('password');
+    $currentPassword = getValue('current_password');
+
+    // Build update fields dynamically
+    $updateFields = [];
+    $params = [];
+    $types = '';
+
+    if ($name) {
+        if (!preg_match('/^[\p{L} ]+$/u', $name)) {
+            sendResponse(['success' => false, 'message' => 'El nombre solo puede contener letras y espacios.']);
+        }
+        $updateFields[] = "nombre_usuario = ?";
+        $params[] = $name;
+        $types .= 's';
     }
 
-    $stmt = mysqli_prepare($conexion, "UPDATE usuario SET nombre_usuario = ? WHERE id_usuario = ?");
-    mysqli_stmt_bind_param($stmt, 'ss', $name, $userId);
-    mysqli_stmt_execute($stmt);
+    if ($email) {
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            sendResponse(['success' => false, 'message' => 'Formato de correo inválido.']);
+        }
+        // Validar que el nuevo correo no esté ya registrado por otro usuario
+        $existingUser = getUserByEmailAndId($conexion, $email, $userId);
+        if ($existingUser) {
+            sendResponse(['success' => false, 'message' => 'Este correo electrónico ya está registrado por otro usuario.']);
+        }
+        $updateFields[] = "correo_usuario = ?";
+        $params[] = $email;
+        $types .= 's';
+    }
 
-    $_SESSION['nombre_usuario'] = $name;
-    sendResponse(['success' => true]);
+    if ($phone !== '') {
+        $phoneDigits = preg_replace('/\D/', '', $phone);
+        if ($phoneDigits && !preg_match('/^[0-9]{10}$/', $phoneDigits)) {
+            sendResponse(['success' => false, 'message' => 'El teléfono debe contener exactamente 10 dígitos.']);
+        }
+        $updateFields[] = "telefono_usuario = ?";
+        $params[] = $phoneDigits ?: '';
+        $types .= 's';
+    }
+
+    if ($address !== '') {
+        $updateFields[] = "direccion_usuario = ?";
+        $params[] = $address;
+        $types .= 's';
+    }
+
+    // If changing password, validate current password first
+    if ($password && $currentPassword) {
+        // Verify current password
+        $user = getUserById($conexion, $userId);
+        if (!$user) {
+            sendResponse(['success' => false, 'message' => 'Usuario no encontrado.']);
+        }
+        $storedPassword = $user['contrasena_usuario'];
+        
+        // Try password_verify (for hashed passwords)
+        $isValid = password_verify($currentPassword, $storedPassword);
+        
+        // If that fails, try direct comparison (for plain text passwords)
+        if (!$isValid) {
+            $isValid = ($currentPassword === $storedPassword);
+        }
+        
+        if (!$isValid) {
+            sendResponse(['success' => false, 'message' => 'La contraseña actual no es correcta.']);
+        }
+        
+        // Now validate new password length
+        if (strlen($password) < 6) {
+            sendResponse(['success' => false, 'message' => 'La nueva contraseña debe tener al menos 6 caracteres.']);
+        }
+        
+        $hashedPassword = password_hash($password, PASSWORD_DEFAULT);
+        $updateFields[] = "contrasena_usuario = ?";
+        $params[] = $hashedPassword;
+        $types .= 's';
+    } elseif ($password && !$currentPassword) {
+        // Trying to change password but didn't provide current password
+        sendResponse(['success' => false, 'message' => 'Debes ingresar tu contraseña actual para cambiarla.']);
+    }
+
+    if (empty($updateFields)) {
+        sendResponse(['success' => false, 'message' => 'No hay campos para actualizar.']);
+    }
+
+    $sql = "UPDATE usuario SET " . implode(', ', $updateFields) . " WHERE id_usuario = ?";
+    $params[] = $userId;
+    $types .= 's';
+
+    $stmt = mysqli_prepare($conexion, $sql);
+    if (!$stmt) {
+        sendResponse(['success' => false, 'message' => 'Error en la consulta: ' . mysqli_error($conexion)]);
+    }
+
+    mysqli_stmt_bind_param($stmt, $types, ...$params);
+    if (!mysqli_stmt_execute($stmt)) {
+        sendResponse(['success' => false, 'message' => 'Error al actualizar el perfil.']);
+    }
+
+    // Update session with new values
+    if ($name) {
+        $_SESSION['nombre_usuario'] = $name;
+    }
+    if ($email) {
+        $_SESSION['correo_usuario'] = $email;
+    }
+
+    // Return updated user data
+    $updatedUser = getUserById($conexion, $userId);
+    sendResponse(['success' => true, 'message' => 'Perfil actualizado correctamente.', 'user' => $updatedUser]);
 }
 
 /* ===================================================
@@ -564,13 +673,69 @@ if ($action === 'admin_update_order_status') {
         sendResponse(['success' => false, 'message' => 'Estado invalido o ID faltante.']);
     }
     
-    $result = updateOrderStatus($conexion, $id, $status);
-    
-    if (!$result) {
-        $dbError = mysqli_error($conexion);
-        sendResponse(['success' => false, 'message' => 'Error actualizando estado: ' . ($dbError ?: 'desconocido')]);
+    // Si el estado es Cancelado, usar lógica transaccional con devolución de stock
+    if ($status === 'Cancelado') {
+        // Verificar que el pedido existe
+        $stmt = mysqli_prepare($conexion, "SELECT id_pedido, estado_pedido FROM pedido WHERE id_pedido = ?");
+        mysqli_stmt_bind_param($stmt, 's', $id);
+        mysqli_stmt_execute($stmt);
+        $result = mysqli_stmt_get_result($stmt);
+        $pedido = mysqli_fetch_assoc($result);
+        
+        if (!$pedido) {
+            sendResponse(['success' => false, 'message' => 'Pedido no encontrado.']);
+        }
+        
+        if ($pedido['estado_pedido'] === 'Cancelado') {
+            sendResponse(['success' => false, 'message' => 'El pedido ya está cancelado.']);
+        }
+        
+        // Iniciar transacción para devolución de stock
+        mysqli_begin_transaction($conexion);
+        try {
+            // Obtener productos del pedido
+            $stmtDet = mysqli_prepare($conexion, "SELECT id_producto, cantidad_detalle_pedido FROM detalle_pedido WHERE id_pedido = ?");
+            mysqli_stmt_bind_param($stmtDet, 's', $id);
+            mysqli_stmt_execute($stmtDet);
+            $resultDet = mysqli_stmt_get_result($stmtDet);
+            
+            $productos = [];
+            while ($row = mysqli_fetch_assoc($resultDet)) {
+                $productos[] = $row;
+            }
+            
+            // Devolver stock: RESTAR cantidad_salida
+            foreach ($productos as $prod) {
+                $stmtStock = mysqli_prepare($conexion, "UPDATE Producto SET cantidad_salida = cantidad_salida - ? WHERE id_producto = ?");
+                if (!$stmtStock) throw new Exception('Error preparando devolución stock: ' . mysqli_error($conexion));
+                mysqli_stmt_bind_param($stmtStock, 'is', $prod['cantidad_detalle_pedido'], $prod['id_producto']);
+                if (!mysqli_stmt_execute($stmtStock)) throw new Exception('Error devolviendo stock: ' . mysqli_stmt_error($stmtStock));
+            }
+            
+            // NO eliminar detalles del pedido - conservarlos para que admin.tsx pueda ver los productos
+            // incluso de pedidos cancelados
+            
+            // Actualizar estado a Cancelado
+            $stmtUpd = mysqli_prepare($conexion, "UPDATE pedido SET estado_pedido = 'Cancelado', fecha_actualizacion = NOW() WHERE id_pedido = ?");
+            mysqli_stmt_bind_param($stmtUpd, 's', $id);
+            if (!mysqli_stmt_execute($stmtUpd)) throw new Exception('Error actualizando estado: ' . mysqli_stmt_error($stmtUpd));
+            
+            mysqli_commit($conexion);
+            sendResponse(['success' => true, 'message' => 'Pedido cancelado con devolución de stock (' . count($productos) . ' productos)']);
+        } catch (Exception $e) {
+            mysqli_rollback($conexion);
+            sendResponse(['success' => false, 'message' => 'Error al cancelar pedido: ' . $e->getMessage()]);
+        }
+    } else {
+        // Para otros estados, solo actualizar el estado (sin cambios de stock)
+        $result = updateOrderStatus($conexion, $id, $status);
+        
+        if (!$result) {
+            $dbError = mysqli_error($conexion);
+            sendResponse(['success' => false, 'message' => 'Error actualizando estado: ' . ($dbError ?: 'desconocido')]);
+        }
+        sendResponse(['success' => true]);
     }
-    sendResponse(['success' => true]);
 }
 
 if ($action === 'admin_get_order_statuses') {
@@ -613,6 +778,209 @@ if ($action === 'user_update_order_status') {
         sendResponse(['success' => false, 'message' => 'Error actualizando estado del pedido.']);
     }
     sendResponse(['success' => true]);
+}
+
+if ($action === 'cancel_order') {
+    $logFile = __DIR__ . '/../debug_cancel.log';
+    file_put_contents($logFile, date('Y-m-d H:i:s') . " - INICIO cancel_order\n", FILE_APPEND);
+    file_put_contents($logFile, "REQUEST: " . json_encode($GLOBALS['requestBody'], JSON_UNESCAPED_UNICODE) . "\n", FILE_APPEND);
+    file_put_contents($logFile, "SESSION: " . json_encode($_SESSION) . "\n", FILE_APPEND);
+    
+    $userId = getAuthenticatedUserId();
+    file_put_contents($logFile, "userId: " . var_export($userId, true) . "\n", FILE_APPEND);
+    if (!$userId) {
+        file_put_contents($logFile, "ERROR: No autenticado\n", FILE_APPEND);
+        sendResponse(['success' => false, 'message' => 'No autenticado.']);
+    }
+    
+    $pedidoId = getValue('pedido_id');
+    file_put_contents($logFile, "pedidoId: " . var_export($pedidoId, true) . "\n", FILE_APPEND);
+    if (!$pedidoId) {
+        file_put_contents($logFile, "ERROR: ID de pedido requerido\n", FILE_APPEND);
+        sendResponse(['success' => false, 'message' => 'ID de pedido requerido.']);
+    }
+    
+    // Obtener el rol del usuario autenticado
+    $userData = getUserById($conexion, $userId);
+    $userRole = $userData ? strtolower(trim($userData['rol_usuario'])) : '';
+    $isAdmin = ($userRole === 'administrador');
+    file_put_contents($logFile, "userRole: $userRole, isAdmin: " . ($isAdmin ? 'true' : 'false') . "\n", FILE_APPEND);
+    
+    if ($isAdmin) {
+        $stmt = mysqli_prepare($conexion, "SELECT id_pedido, estado_pedido, total_pedido FROM pedido WHERE id_pedido = ?");
+        mysqli_stmt_bind_param($stmt, 's', $pedidoId);
+    } else {
+        $stmt = mysqli_prepare($conexion, "SELECT id_pedido, estado_pedido, total_pedido FROM pedido WHERE id_pedido = ? AND id_usuario = ?");
+        mysqli_stmt_bind_param($stmt, 'ss', $pedidoId, $userId);
+    }
+    mysqli_stmt_execute($stmt);
+    $result = mysqli_stmt_get_result($stmt);
+    $pedido = mysqli_fetch_assoc($result);
+    
+    if (!$pedido) {
+        file_put_contents($logFile, "ERROR: Pedido no encontrado\n", FILE_APPEND);
+        sendResponse(['success' => false, 'message' => 'Pedido no encontrado o no tienes permiso.']);
+    }
+    file_put_contents($logFile, "pedido encontrado: " . json_encode($pedido) . "\n", FILE_APPEND);
+    
+    if ($pedido['estado_pedido'] !== 'Pendiente') {
+        file_put_contents($logFile, "ERROR: Estado no es Pendiente: {$pedido['estado_pedido']}\n", FILE_APPEND);
+        sendResponse(['success' => false, 'message' => 'Solo se pueden cancelar pedidos Pendientes. Estado actual: ' . $pedido['estado_pedido']]);
+    }
+    
+    // Iniciar transacción
+    mysqli_begin_transaction($conexion);
+    
+    try {
+        // Obtener productos del pedido
+        $stmtDet = mysqli_prepare($conexion, "SELECT id_producto, cantidad_detalle_pedido FROM detalle_pedido WHERE id_pedido = ?");
+        mysqli_stmt_bind_param($stmtDet, 's', $pedidoId);
+        mysqli_stmt_execute($stmtDet);
+        $resultDet = mysqli_stmt_get_result($stmtDet);
+        
+        $productos = [];
+        while ($row = mysqli_fetch_assoc($resultDet)) {
+            $productos[] = $row;
+        }
+        
+        // Devolver stock
+        foreach ($productos as $prod) {
+            $stmtStock = mysqli_prepare($conexion, "UPDATE Producto SET cantidad_salida = cantidad_salida - ? WHERE id_producto = ?");
+            if (!$stmtStock) throw new Exception('Error preparando devolución stock: ' . mysqli_error($conexion));
+            mysqli_stmt_bind_param($stmtStock, 'is', $prod['cantidad_detalle_pedido'], $prod['id_producto']);
+            if (!mysqli_stmt_execute($stmtStock)) throw new Exception('Error devolviendo stock: ' . mysqli_stmt_error($stmtStock));
+        }
+        
+        // NO eliminar detalles del pedido - conservarlos para que admin.tsx pueda ver los productos
+        // incluso de pedidos cancelados. Solo cambiamos el estado.
+        
+        $stmtUpd = mysqli_prepare($conexion, "UPDATE pedido SET estado_pedido = 'Cancelado', fecha_actualizacion = NOW() WHERE id_pedido = ?");
+        mysqli_stmt_bind_param($stmtUpd, 's', $pedidoId);
+        if (!mysqli_stmt_execute($stmtUpd)) throw new Exception('Error actualizando estado: ' . mysqli_stmt_error($stmtUpd));
+        
+        mysqli_commit($conexion);
+        
+        sendResponse([
+            'success' => true,
+            'message' => 'Pedido cancelado exitosamente',
+            'productos_devueltos' => count($productos)
+        ]);
+        
+    } catch (Exception $e) {
+        mysqli_rollback($conexion);
+        sendResponse(['success' => false, 'message' => 'Error: ' . $e->getMessage()]);
+    }
+}
+
+if ($action === 'edit_order') {
+    $userId = getAuthenticatedUserId();
+    if (!$userId) {
+        sendResponse(['success' => false, 'message' => 'No autenticado.']);
+    }
+    
+    $pedidoId = getValue('pedido_id');
+    // productos viene como array directamente en el JSON, no como string
+    $productos = $GLOBALS['requestBody']['productos'] ?? [];
+    
+    if (!$pedidoId || empty($productos)) {
+        sendResponse(['success' => false, 'message' => 'Datos incompletos.']);
+    }
+    
+    if (!is_array($productos) || empty($productos)) {
+        sendResponse(['success' => false, 'message' => 'Debe incluir al menos un producto.']);
+    }
+    
+    // Obtener el rol del usuario autenticado
+    $userData = getUserById($conexion, $userId);
+    $userRole = $userData ? strtolower(trim($userData['rol_usuario'])) : '';
+    $isAdmin = ($userRole === 'administrador');
+    
+    if ($isAdmin) {
+        // Admin puede editar cualquier pedido
+        $stmt = mysqli_prepare($conexion, "SELECT id_pedido, estado_pedido, total_pedido FROM pedido WHERE id_pedido = ?");
+        mysqli_stmt_bind_param($stmt, 's', $pedidoId);
+    } else {
+        // Empleado/Cliente solo puede editar sus propios pedidos
+        $stmt = mysqli_prepare($conexion, "SELECT id_pedido, estado_pedido, total_pedido FROM pedido WHERE id_pedido = ? AND id_usuario = ?");
+        mysqli_stmt_bind_param($stmt, 'ss', $pedidoId, $userId);
+    }
+    mysqli_stmt_execute($stmt);
+    $result = mysqli_stmt_get_result($stmt);
+    $pedido = mysqli_fetch_assoc($result);
+    
+    if (!$pedido) {
+        sendResponse(['success' => false, 'message' => 'Pedido no encontrado o no tienes permiso.']);
+    }
+    
+    if ($pedido['estado_pedido'] !== 'Pendiente') {
+        sendResponse(['success' => false, 'message' => 'Solo se pueden editar pedidos Pendientes. Estado actual: ' . $pedido['estado_pedido']]);
+    }
+    
+    // Iniciar transacción
+    mysqli_begin_transaction($conexion);
+    
+    try {
+        // Obtener productos actuales del pedido
+        $stmtDet = mysqli_prepare($conexion, "SELECT id_producto, cantidad_detalle_pedido FROM detalle_pedido WHERE id_pedido = ?");
+        mysqli_stmt_bind_param($stmtDet, 's', $pedidoId);
+        mysqli_stmt_execute($stmtDet);
+        $resultDet = mysqli_stmt_get_result($stmtDet);
+        
+        $productosActuales = [];
+        while ($row = mysqli_fetch_assoc($resultDet)) {
+            $productosActuales[] = $row;
+        }
+        
+        // Devolver stock de productos anteriores
+        foreach ($productosActuales as $prod) {
+            $stmtStock = mysqli_prepare($conexion, "UPDATE Producto SET cantidad_salida = cantidad_salida - ? WHERE id_producto = ?");
+            mysqli_stmt_bind_param($stmtStock, 'is', $prod['cantidad_detalle_pedido'], $prod['id_producto']);
+            mysqli_stmt_execute($stmtStock);
+        }
+        
+        // Eliminar detalles anteriores
+        $stmtDel = mysqli_prepare($conexion, "DELETE FROM detalle_pedido WHERE id_pedido = ?");
+        mysqli_stmt_bind_param($stmtDel, 's', $pedidoId);
+        mysqli_stmt_execute($stmtDel);
+        
+        // Insertar nuevos productos y descontar stock
+        $nuevoTotal = 0;
+        foreach ($productos as $prod) {
+            $idProducto = $prod['id'];
+            $cantidad = intval($prod['qty']);
+            $precio = floatval($prod['price']);
+            $subtotal = $cantidad * $precio;
+            $nuevoTotal += $subtotal;
+            
+            // Insertar detalle
+            $idDetalle = uniqid('DET');
+            $stmtIns = mysqli_prepare($conexion, "INSERT INTO detalle_pedido (id_detalle, cantidad_detalle_pedido, precio_unitario_detalle_pedido, subtotal_detalle_pedido, id_pedido, id_producto) VALUES (?, ?, ?, ?, ?, ?)");
+            mysqli_stmt_bind_param($stmtIns, 'siddss', $idDetalle, $cantidad, $precio, $subtotal, $pedidoId, $idProducto);
+            mysqli_stmt_execute($stmtIns);
+            
+            // Descontar stock
+            $stmtStock = mysqli_prepare($conexion, "UPDATE Producto SET cantidad_salida = cantidad_salida + ? WHERE id_producto = ?");
+            mysqli_stmt_bind_param($stmtStock, 'is', $cantidad, $idProducto);
+            mysqli_stmt_execute($stmtStock);
+        }
+        
+        // Actualizar total del pedido
+        $stmtUpd = mysqli_prepare($conexion, "UPDATE pedido SET total_pedido = ? WHERE id_pedido = ?");
+        mysqli_stmt_bind_param($stmtUpd, 'ds', $nuevoTotal, $pedidoId);
+        mysqli_stmt_execute($stmtUpd);
+        
+        mysqli_commit($conexion);
+        
+        sendResponse([
+            'success' => true,
+            'message' => 'Pedido actualizado exitosamente',
+            'total_nuevo' => $nuevoTotal
+        ]);
+        
+    } catch (Exception $e) {
+        mysqli_rollback($conexion);
+        sendResponse(['success' => false, 'message' => 'Error: ' . $e->getMessage()]);
+    }
 }
 
 /* ===================================================
@@ -840,4 +1208,3 @@ if ($action === 'admin_get_activity_count') {
 
 sendResponse(['success' => false, 'message' => 'Accion no valida.']);
 ?>
-

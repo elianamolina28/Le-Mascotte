@@ -10,12 +10,19 @@ import {
   TextInput,
   Alert,
   Dimensions,
+  KeyboardAvoidingView,
+  Platform,
+  TouchableOpacity,
 } from 'react-native';
+import { useRouter } from 'expo-router';
 import { BarChart } from 'react-native-chart-kit';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { COLORS, sharedStyles, money, statusColor, roleColor, formatDate, FilterChip } from './shared/styles';
-import { exportToPdf, exportToExcel, ReportRow } from '../../utils/ReportGenerator';
+import { COLORS, sharedStyles, money, statusColor, roleColor, formatDate, FilterChip } from '../shared/styles';
+import { exportToPdf, exportToExcel, exportOrdersToPdf, exportOrdersToExcel, exportUsersToPdf, exportUsersToExcel, exportProveedoresToPdf, exportProveedoresToExcel, exportTrendingToPdf, exportTrendingToExcel, ReportRow, OrderReportRow, UserReportRow, ProveedorReportRow, TrendingReportRow } from '../../utils/ReportGenerator';
 import InputValidado from '../components/InputValidado';
+import EditProfileForm from '../components/EditProfileForm';
+import UserHeader from '../components/UserHeader';
+import { handleLogout, saveUserSession, getStoredUser, User as AuthUser } from '../../utils/AuthService';
 import {
   validateOnlyLetters,
   validateNumeric,
@@ -43,7 +50,19 @@ type Product = {
   valor_compra?: number;
 };
 
-type User = { id: number | string; name: string; email: string; role: string; status?: string };
+function normalizeUser(rawUser: Record<string, any> | undefined | null): AuthUser | null {
+  if (!rawUser) return null;
+  return {
+    id: rawUser.id_usuario || rawUser.id || null,
+    name: rawUser.nombre_usuario || rawUser.name || '',
+    email: rawUser.correo_usuario || rawUser.email || '',
+    role: rawUser.rol_usuario || rawUser.role || '',
+    phone: rawUser.telefono_usuario || rawUser.phone || '',
+    address: rawUser.direccion_usuario || rawUser.address || '',
+  };
+}
+
+type User = { id: number | string; name: string; email: string; role: string; status?: string; password?: string };
 
 type Proveedor = {
   id: string;
@@ -88,7 +107,7 @@ type OrderDetail = {
 };
 
 type ProductFieldErrors = Partial<Record<'name' | 'category' | 'price' | 'stock' | 'img', string>>;
-type UserFieldErrors = Partial<Record<'name' | 'email' | 'role', string>>;
+type UserFieldErrors = Partial<Record<'name' | 'email' | 'role' | 'password', string>>;
 type ProveedorFieldErrors = Partial<Record<'nombre' | 'contacto' | 'nit' | 'direccion' | 'telefono' | 'email', string>>;
 
 type TrendingProduct = {
@@ -141,7 +160,7 @@ const initialUsers: User[] = [];
 const ORDER_STATUSES = ['Pendiente', 'Preparando', 'Enviado', 'Entregado', 'Cancelado'];
 
 const XAMPP_PROJECT_PATH = 'Mocap%20Le%20Mascotte.V4.2.0';
-const CANDIDATE_HOSTS = ['localhost', '172.30.4.104', '172.30.5.119', '10.0.2.2', '192.168.101.16'];
+const CANDIDATE_HOSTS = ['localhost', '172.30.5.119', '172.30.5.119', '192.168.137.191', '10.0.2.2', '192.168.101.16'];
 const API_HOST_STORAGE_KEY = 'lemascotte_api_host_admin_v2';
 
 const getApiUrlFromHost = (host: string) => `http://${host}/${XAMPP_PROJECT_PATH}/models/ajax_lemascotte.php`;
@@ -159,6 +178,18 @@ export default function AdminPage() {
   const [inventoryStockLevel, setInventoryStockLevel] = useState(''); // '' | 'bajo' | 'alto' | 'agotado'
   const [inventoryProducts, setInventoryProducts] = useState<Product[]>([]);
   const [inventoryLoading, setInventoryLoading] = useState(false);
+
+  // === ORDERS EXPORT STATE ===
+  const [ordersExporting, setOrdersExporting] = useState<'pdf' | 'excel' | null>(null);
+
+  // === USERS EXPORT STATE ===
+  const [usersExporting, setUsersExporting] = useState<'pdf' | 'excel' | null>(null);
+
+  // === PROVEEDORES EXPORT STATE ===
+  const [proveedoresExporting, setProveedoresExporting] = useState<'pdf' | 'excel' | null>(null);
+
+  // === TRENDING EXPORT STATE ===
+  const [trendingExporting, setTrendingExporting] = useState<'pdf' | 'excel' | null>(null);
 
   // === STATS CLICK MODAL ===
   const [statsModalOpen, setStatsModalOpen] = useState(false);
@@ -279,6 +310,51 @@ export default function AdminPage() {
   const [testNuevoEstado, setTestNuevoEstado] = useState('Pendiente');
   const [testCambiarResult, setTestCambiarResult] = useState('');
   const [testLoading, setTestLoading] = useState(false);
+
+  // === PROFILE & LOGOUT STATE ===
+  const router = useRouter();
+  const [profileUser, setProfileUser] = useState<AuthUser | null>(null);
+  const [showProfileModal, setShowProfileModal] = useState(false);
+
+  // Load stored user on mount
+  useEffect(() => {
+    (async () => {
+      const stored = await getStoredUser();
+      if (stored) {
+        setProfileUser(stored);
+      } else {
+        // Try to get from server session
+        const sessionResp = await apiCall({ action: 'session' });
+        if (sessionResp && sessionResp.success && sessionResp.user) {
+          const user = normalizeUser(sessionResp.user);
+          if (user) {
+            setProfileUser(user);
+            await saveUserSession(user);
+          }
+        }
+      }
+    })();
+  }, []);
+
+  // AuthGuard: redirect non-admin users away from admin panel
+  useEffect(() => {
+    (async () => {
+      const stored = await getStoredUser();
+      if (!stored) {
+        router.replace('/');
+        return;
+      }
+      const normalized = (stored.role || '').trim().toLowerCase();
+      const isAdmin = normalized.includes('admin');
+      if (!isAdmin) {
+        if (normalized.includes('empleado')) {
+          router.replace('/empleado');
+        } else {
+          router.replace('/');
+        }
+      }
+    })();
+  }, [router]);
 
   const categories = ['Perros', 'Gatos', 'Accesorios', 'Peces', 'Aves', 'Pequeñas Mascotas', 'Salud', 'Higiene', 'Ofertas'];
   const userRoles = ['admin', 'cliente', 'empleado'];
@@ -405,17 +481,22 @@ export default function AdminPage() {
   // Load trending data when section is 'tendencias'
   useEffect(() => {
     let cancelled = false;
-    if (section === 'tendencias') {
-      setTrendingLoading(true);
-      const action = trendingTab === 'carrito' ? 'admin_get_cart_trending' : 'admin_get_wishlist_trending';
-      apiCall({ action, order: trendingOrder, limit: 50 }).then((resp) => {
-        if (!cancelled && resp && resp.success && Array.isArray(resp.products)) {
-          if (trendingTab === 'carrito') setCartTrending(resp.products);
-          else setWishlistTrending(resp.products);
+    const loadTrending = async () => {
+      try {
+        if (section === 'tendencias') {
+          const action = trendingTab === 'carrito' ? 'admin_get_cart_trending' : 'admin_get_wishlist_trending';
+          const resp = await apiCall({ action, order: trendingOrder, limit: 50 });
+          if (!cancelled && resp && resp.success && Array.isArray(resp.products)) {
+            if (trendingTab === 'carrito') setCartTrending(resp.products);
+            else setWishlistTrending(resp.products);
+          }
         }
+      } catch {}
+      finally {
         if (!cancelled) setTrendingLoading(false);
-      }).catch(() => { if (!cancelled) setTrendingLoading(false); });
-    }
+      }
+    };
+    loadTrending();
     return () => { cancelled = true; };
   }, [section, trendingTab, trendingOrder]);
 
@@ -517,6 +598,138 @@ export default function AdminPage() {
     const ok = await exportToExcel(inventoryRows, 'Inventario - Le Mascotte');
     if (!ok) showMsg('Error al generar Excel', 'error');
     setExporting(null);
+  }
+
+  // === ORDERS EXPORT HANDLERS ===
+  const orderRows: OrderReportRow[] = useMemo(() => {
+    return ordersDetailed.map((o) => ({
+      orderId: o.id,
+      date: formatDate(o.date),
+      clientName: o.user_name,
+      clientEmail: o.user_email,
+      clientPhone: o.user_phone,
+      products: o.products && o.products.length > 0
+        ? o.products.map(p => `${p.product_name || 'Producto'} x${p.qty}`).join(', ')
+        : 'Sin detalle',
+      total: o.total,
+      status: o.status,
+      paymentMethod: o.payment_method,
+      address: o.address
+        ? `${o.address.tipo_via} ${o.address.numero_via}${o.address.letra_via} ${o.address.numero_placa}${o.address.letra_placa}, ${o.address.localidad}${o.address.complemento ? ', ' + o.address.complemento : ''}`
+        : undefined,
+    }));
+  }, [ordersDetailed]);
+
+  async function handleExportOrdersPdf() {
+    setOrdersExporting('pdf');
+    const ok = await exportOrdersToPdf(orderRows, 'Pedidos - Le Mascotte');
+    if (!ok) showMsg('Error al generar PDF de pedidos', 'error');
+    setOrdersExporting(null);
+  }
+
+  async function handleExportOrdersExcel() {
+    setOrdersExporting('excel');
+    const ok = await exportOrdersToExcel(orderRows, 'Pedidos - Le Mascotte');
+    if (!ok) showMsg('Error al generar Excel de pedidos', 'error');
+    setOrdersExporting(null);
+  }
+
+  // === USERS EXPORT HANDLERS ===
+  const userRows: UserReportRow[] = useMemo(() => {
+    return users.map((u) => ({
+      name: u.name,
+      email: u.email,
+      role: u.role,
+      status: u.status || 'Activo',
+    }));
+  }, [users]);
+
+  async function handleExportUsersPdf() {
+    setUsersExporting('pdf');
+    const ok = await exportUsersToPdf(userRows, 'Usuarios - Le Mascotte');
+    if (!ok) showMsg('Error al generar PDF de usuarios', 'error');
+    setUsersExporting(null);
+  }
+
+  async function handleExportUsersExcel() {
+    setUsersExporting('excel');
+    const ok = await exportUsersToExcel(userRows, 'Usuarios - Le Mascotte');
+    if (!ok) showMsg('Error al generar Excel de usuarios', 'error');
+    setUsersExporting(null);
+  }
+
+  // === PROVEEDORES EXPORT HANDLERS ===
+  const proveedorRows: ProveedorReportRow[] = useMemo(() => {
+    return proveedores.map((p) => ({
+      nombre: p.nombre,
+      nit: p.nit,
+      contacto: p.contacto,
+      telefono: p.telefono,
+      email: p.email,
+      direccion: p.direccion,
+      estado: p.estado,
+    }));
+  }, [proveedores]);
+
+  async function handleExportProveedoresPdf() {
+    setProveedoresExporting('pdf');
+    const ok = await exportProveedoresToPdf(proveedorRows, 'Proveedores - Le Mascotte');
+    if (!ok) showMsg('Error al generar PDF de proveedores', 'error');
+    setProveedoresExporting(null);
+  }
+
+  async function handleExportProveedoresExcel() {
+    setProveedoresExporting('excel');
+    const ok = await exportProveedoresToExcel(proveedorRows, 'Proveedores - Le Mascotte');
+    if (!ok) showMsg('Error al generar Excel de proveedores', 'error');
+    setProveedoresExporting(null);
+  }
+
+  // === TRENDING EXPORT HANDLERS ===
+  const trendingAnalyticsRows: TrendingReportRow[] = useMemo(() => {
+    const data = analyticsTab === 'carrito' ? cartAnalytics : wishlistAnalytics;
+    return data.map((item) => ({
+      name: item.name,
+      category: '',
+      stock: item.stock,
+      total_count: item.times_added,
+      times_added: item.times_added,
+      unique_users: item.unique_users,
+    }));
+  }, [analyticsTab, cartAnalytics, wishlistAnalytics]);
+
+  const trendingPopularRows: TrendingReportRow[] = useMemo(() => {
+    const data = trendingTab === 'carrito' ? cartTrending : wishlistTrending;
+    return data.map((item) => ({
+      name: item.name,
+      category: item.category || '',
+      stock: item.stock,
+      total_count: item.total_count,
+    }));
+  }, [trendingTab, cartTrending, wishlistTrending]);
+
+  async function handleExportTrendingPdf() {
+    setTrendingExporting('pdf');
+    const isAnalytics = analyticsTab === 'carrito' || analyticsTab === 'wishlist';
+    const rows = isAnalytics ? trendingAnalyticsRows : trendingPopularRows;
+    const title = isAnalytics
+      ? `Tendencias Analytics - ${analyticsTab === 'carrito' ? 'Carrito' : 'Wishlist'} - Le Mascotte`
+      : `Tendencias Populares - ${trendingTab === 'carrito' ? 'Carrito' : 'Wishlist'} - Le Mascotte`;
+    const ok = await exportTrendingToPdf(rows, title, isAnalytics);
+    if (!ok) showMsg('Error al generar PDF de tendencias', 'error');
+    setTrendingExporting(null);
+  }
+
+  async function handleExportTrendingExcel() {
+    setTrendingExporting('excel');
+    const isAnalytics = analyticsTab === 'carrito' || analyticsTab === 'wishlist';
+    const rows = isAnalytics ? trendingAnalyticsRows : trendingPopularRows;
+    const title = isAnalytics
+      ? `Tendencias Analytics - ${analyticsTab === 'carrito' ? 'Carrito' : 'Wishlist'} - Le Mascotte`
+      : `Tendencias Populares - ${trendingTab === 'carrito' ? 'Carrito' : 'Wishlist'} - Le Mascotte`;
+    const ok = await exportTrendingToExcel(rows, title, isAnalytics);
+    if (!ok) showMsg('Error al generar Excel de tendencias', 'error');
+    setTrendingExporting(null);
   }
 
   // === STATS CLICK HANDLERS ===
@@ -630,7 +843,7 @@ export default function AdminPage() {
   // --- USER HANDLERS ---
   function openNewUser() {
     setUserErrors({});
-    setEditingUser({ id: '', name: '', email: '', role: 'cliente', status: 'Activo' });
+    setEditingUser({ id: '', name: '', email: '', role: 'empleado', status: 'Activo', password: '' });
     setShowUserModal(true);
   }
 
@@ -640,7 +853,7 @@ export default function AdminPage() {
     setShowUserModal(true);
   }
 
-  async function saveUser(u: User) {
+  async function saveUser(u: User & { password?: string }) {
     const errors: UserFieldErrors = {};
     if (!u.name.trim()) errors.name = 'Ingresa el nombre';
     if (!u.email.trim()) {
@@ -649,13 +862,19 @@ export default function AdminPage() {
       errors.email = 'Ingresa un correo valido';
     }
     if (!u.role) errors.role = 'Selecciona un rol';
+    // For new users, password is required
+    if (!u.id && !u.password) errors.password = 'Ingresa una contraseña';
+    if (u.password && u.password.length < 6) errors.password = 'Minimo 6 caracteres';
     if (Object.keys(errors).length > 0) {
       setUserErrors(errors);
       showMsg('Revisa los campos marcados', 'error');
       return;
     }
-    const uid = typeof u.id === 'number' ? (u.id > 0 ? u.id : '') : (u.id ? u.id : '');
-    const payload = { action: 'save_dashboard_user', id: uid, name: u.name, email: u.email, role: u.role, status: u.status ?? 'Activo' };
+    const uid = (typeof u.id === 'number') ? (u.id > 0 ? u.id : '') : (u.id ? u.id : '');
+    const payload: any = { action: 'save_dashboard_user', id: uid, name: u.name, email: u.email, role: u.role, status: u.status ?? 'Activo' };
+    if (!uid && u.password) {
+      payload.password = u.password;
+    }
     const resp = await apiCall(payload);
     if (resp && resp.success) {
       showMsg('Usuario guardado', 'success');
@@ -871,6 +1090,266 @@ export default function AdminPage() {
     { key: 'agotado', label: 'Agotado' },
   ];
 
+  // ---- CARD RENDERERS FOR FLATLIST ----
+
+  function renderProductCard({ item: p, index: idx }: { item: Product; index: number }) {
+    return (
+      <View style={styles2.card}>
+        <View style={styles2.cardRow}>
+          <Image source={{ uri: p.img || 'https://via.placeholder.com/50' }} style={styles2.cardImg} />
+          <View style={styles2.cardInfo}>
+            <Text style={styles2.cardTitle} numberOfLines={2}>{p.name}</Text>
+            <Text style={styles2.cardSubtitle}>{p.category}</Text>
+            <View style={styles2.cardBadgeRow}>
+              <View style={[styles2.cardBadge, { backgroundColor: statusColor(p.status) }]}>
+                <Text style={styles2.cardBadgeText}>{p.status}</Text>
+              </View>
+              <Text style={[styles2.cardStock, { color: (p.stock ?? 0) >= 20 ? '#2d6a4f' : (p.stock ?? 0) > 0 ? '#ffc107' : '#e74c3c' }]}>
+                Stock: {p.stock ?? 0}
+              </Text>
+            </View>
+          </View>
+        </View>
+        <View style={styles2.cardDetails}>
+          <View style={styles2.cardDetailItem}>
+            <Text style={styles2.cardDetailLabel}>Venta</Text>
+            <Text style={styles2.cardDetailValue}>{money(p.price)}</Text>
+          </View>
+          <View style={styles2.cardDetailItem}>
+            <Text style={styles2.cardDetailLabel}>Compra</Text>
+            <Text style={styles2.cardDetailValue}>{money(p.valor_compra ?? 0)}</Text>
+          </View>
+          <View style={styles2.cardDetailItem}>
+            <Text style={styles2.cardDetailLabel}>Entr.</Text>
+            <Text style={styles2.cardDetailValue}>{p.cantidad_entrada ?? 0}</Text>
+          </View>
+          <View style={styles2.cardDetailItem}>
+            <Text style={styles2.cardDetailLabel}>Sal.</Text>
+            <Text style={styles2.cardDetailValue}>{p.cantidad_salida ?? 0}</Text>
+          </View>
+        </View>
+        <View style={styles2.cardActions}>
+          <TouchableOpacity style={styles2.cardBtn} onPress={() => openEditProduct(p)}>
+            <Text style={styles2.cardBtnText}>Editar</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles2.cardBtnOutline} onPress={() => toggleProductStatus(p)}>
+            <Text style={styles2.cardBtnOutlineText}>Deshab.</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
+
+  function renderUserCard({ item: u }: { item: User }) {
+    return (
+      <View style={styles2.card}>
+        <View style={styles2.cardInfo}>
+          <View style={styles2.cardRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles2.cardTitle}>{u.name}</Text>
+              <Text style={styles2.cardSubtitle}>{u.email}</Text>
+            </View>
+            <View style={[styles2.roleBadge, { backgroundColor: roleColor(u.role) }]}>
+              <Text style={{ color: '#fff', fontWeight: '800', fontSize: 11 }}>{u.role.toUpperCase()}</Text>
+            </View>
+          </View>
+          <Text style={[styles2.cardStatus, { color: statusColor(u.status) }]}>{u.status}</Text>
+        </View>
+        <View style={styles2.cardActions}>
+          <TouchableOpacity style={styles2.cardBtn} onPress={() => openEditUser(u)}>
+            <Text style={styles2.cardBtnText}>Editar</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles2.cardBtnOutline} onPress={() => toggleUserStatus(u)}>
+            <Text style={styles2.cardBtnOutlineText}>{u.status === 'Activo' ? 'Bloquear' : 'Activar'}</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
+
+  function renderProveedorCard({ item: prov }: { item: Proveedor }) {
+    return (
+      <View style={styles2.card}>
+        <View style={styles2.cardRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles2.cardTitle}>{prov.nombre}</Text>
+            {prov.email ? <Text style={styles2.cardSubtitle}>{prov.email}</Text> : null}
+            <Text style={styles2.cardSmall}>NIT: {prov.nit}</Text>
+          </View>
+          <Text style={[styles2.cardStatus, { color: statusColor(prov.estado) }]}>{prov.estado}</Text>
+        </View>
+        <View style={styles2.cardRow}>
+          <Text style={styles2.cardSmall}>📞 {prov.telefono || '—'}</Text>
+          <Text style={styles2.cardSmall}>👤 {prov.contacto || '—'}</Text>
+        </View>
+        <View style={styles2.cardActions}>
+          <TouchableOpacity style={styles2.cardBtn} onPress={() => openEditProveedor(prov)}>
+            <Text style={styles2.cardBtnText}>Editar</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles2.cardBtnOutline} onPress={() => toggleProveedorStatus(prov)}>
+            <Text style={styles2.cardBtnOutlineText}>{prov.estado === 'Activo' ? 'Desact.' : 'Activar'}</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
+
+  function renderOrderCard({ item: order }: { item: OrderDetail }) {
+    return (
+      <View style={styles2.card}>
+        <View style={styles2.cardRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles2.cardTitle}>Pedido #{order.id}</Text>
+            <Text style={styles2.cardSmall}>{formatDate(order.date)}</Text>
+          </View>
+          <TouchableOpacity
+            onPress={() => {
+              const currentStatus = order.status;
+              const options = ORDER_STATUSES.filter(s => s !== currentStatus).map(s => ({
+                text: s,
+                onPress: () => updateOrderStatus(order.id, s)
+              }));
+              Alert.alert('Cambiar estado', `Selecciona el nuevo estado para el pedido ${order.id}`, [
+                ...options,
+                { text: 'Cancelar', style: 'cancel' }
+              ]);
+            }}
+            style={[styles2.statusBadge, { backgroundColor: statusColor(order.status) }]}>
+            <Text style={styles2.statusBadgeText}>{order.status} ▾</Text>
+          </TouchableOpacity>
+        </View>
+        <View style={styles2.cardRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles2.cardSubtitle}>{order.user_name}</Text>
+            <Text style={styles2.cardSmall}>{order.user_email}</Text>
+          </View>
+          <Text style={styles2.cardPrice}>{money(order.total)}</Text>
+        </View>
+        <View style={styles2.cardRow}>
+          <View style={{ flex: 1 }}>
+            {order.products && order.products.slice(0, 2).map((p, i) => (
+              <Text key={i} style={styles2.cardSmall}>{p.product_name || 'Producto'} x{p.qty}</Text>
+            ))}
+            {order.products && order.products.length > 2 && (
+              <Text style={styles2.cardSmall}>+{order.products.length - 2} más</Text>
+            )}
+          </View>
+          <TouchableOpacity style={styles2.cardBtnSmall} onPress={() => openOrderDetail(order)}>
+            <Text style={styles2.cardBtnSmallText}>Detalle</Text>
+          </TouchableOpacity>
+        </View>
+        <View style={[styles2.cardActions, { marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: '#f0e6ef' }]}>
+          <TouchableOpacity style={[styles2.cardBtn, { flex: 1, marginRight: 6 }]} onPress={() => openOrderDetail(order)}>
+            <Text style={styles2.cardBtnText}>👁️ Ver</Text>
+          </TouchableOpacity>
+          {order.status === 'Pendiente' && (
+            <>
+              <TouchableOpacity 
+                style={[styles2.cardBtn, { flex: 1, backgroundColor: '#ffd44d', marginRight: 6 }]} 
+                onPress={() => openOrderDetail(order)}
+              >
+                <Text style={[styles2.cardBtnText, { color: '#6b124f' }]}>✏️ Editar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={[styles2.cardBtnOutline, { flex: 1, borderColor: '#e74c3c' }]} 
+                onPress={() => {
+                  Alert.alert('Cancelar Pedido', `¿Estás seguro de cancelar el pedido ${order.id}? El stock será devuelto al inventario.`, [
+                    { text: 'No', style: 'cancel' },
+                    { 
+                      text: 'Sí, Cancelar', 
+                      style: 'destructive',
+                      onPress: () => updateOrderStatus(order.id, 'Cancelado')
+                    }
+                  ]);
+                }}
+              >
+                <Text style={[styles2.cardBtnOutlineText, { color: '#e74c3c' }]}>❌ Cancelar</Text>
+              </TouchableOpacity>
+            </>
+          )}
+        </View>
+      </View>
+    );
+  }
+
+  function renderAnalyticsCard({ item, index: idx }: { item: AnalyticsProduct; index: number }) {
+    const page = analyticsTab === 'carrito' ? cartAnalyticsPage : wishlistAnalyticsPage;
+    return (
+      <View style={styles2.card}>
+        <View style={styles2.cardRow}>
+          <View style={styles2.cardRank}>
+            <Text style={styles2.cardRankText}>{page === 1 && idx < 3 ? ['🥇', '🥈', '🥉'][idx] : `#${idx + 1 + (page - 1) * PER_PAGE}`}</Text>
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles2.cardTitle} numberOfLines={2}>{item.name}</Text>
+            <Text style={styles2.cardSubtitle}>{money(item.price)}</Text>
+          </View>
+        </View>
+        <View style={styles2.cardDetails}>
+          <View style={styles2.cardDetailItem}>
+            <Text style={styles2.cardDetailLabel}>Veces</Text>
+            <View style={{ backgroundColor: analyticsTab === 'carrito' ? '#f0e8ff' : '#fff0f0', borderRadius: 20, paddingVertical: 4, paddingHorizontal: 10 }}>
+              <Text style={{ fontWeight: '900', color: analyticsTab === 'carrito' ? '#7a1458' : '#e74c3c', fontSize: 14 }}>{item.times_added}x</Text>
+            </View>
+          </View>
+          <View style={styles2.cardDetailItem}>
+            <Text style={styles2.cardDetailLabel}>Usuarios</Text>
+            <Text style={[styles2.cardDetailValue, { color: '#0d6efd' }]}>{item.unique_users}</Text>
+          </View>
+          <View style={styles2.cardDetailItem}>
+            <Text style={styles2.cardDetailLabel}>Stock</Text>
+            <Text style={[styles2.cardDetailValue, { color: (item.stock ?? 0) > 0 ? '#2d6a4f' : '#e74c3c' }]}>{item.stock ?? 0}</Text>
+          </View>
+        </View>
+      </View>
+    );
+  }
+
+  function renderTrendingCard({ item, index: idx }: { item: TrendingProduct; index: number }) {
+    return (
+      <View style={styles2.card}>
+        <View style={styles2.cardRow}>
+          <View style={styles2.cardRank}>
+            <Text style={styles2.cardRankText}>{idx < 3 ? ['🥇', '🥈', '🥉'][idx] : `#${idx + 1}`}</Text>
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles2.cardTitle} numberOfLines={2}>{item.name}</Text>
+            <Text style={styles2.cardSubtitle}>{item.category || '—'}</Text>
+          </View>
+        </View>
+        <View style={styles2.cardDetails}>
+          <View style={styles2.cardDetailItem}>
+            <Text style={styles2.cardDetailLabel}>Stock</Text>
+            <Text style={[styles2.cardDetailValue, { color: (item.stock ?? 0) > 0 ? '#2d6a4f' : '#e74c3c' }]}>{item.stock ?? 0}</Text>
+          </View>
+          <View style={styles2.cardDetailItem}>
+            <Text style={styles2.cardDetailLabel}>{trendingTab === 'carrito' ? 'En Carrito' : 'En Wishlist'}</Text>
+            <View style={{ backgroundColor: '#f0e8ff', borderRadius: 20, paddingVertical: 4, paddingHorizontal: 12 }}>
+              <Text style={{ fontWeight: '900', color: '#6b124f', fontSize: 14 }}>{item.total_count}</Text>
+            </View>
+          </View>
+        </View>
+      </View>
+    );
+  }
+
+  function renderStatsProductCard({ item: p, index: idx }: { item: Product; index: number }) {
+    return (
+      <View style={styles2.compactCard}>
+        <View style={styles2.cardRow}>
+          <Text style={styles2.cardSmall}>#{idx + 1}</Text>
+          <View style={{ flex: 1, marginLeft: 8 }}>
+            <Text style={styles2.cardTitle} numberOfLines={1}>{p.name}</Text>
+          </View>
+          <Text style={[styles2.cardDetailValue, { color: (p.stock ?? 0) === 0 ? '#e74c3c' : (p.stock ?? 0) < 5 ? '#ffc107' : '#2d6a4f' }]}>
+            {p.stock ?? 0}
+          </Text>
+          <Text style={[styles2.cardDetailValue, { marginLeft: 12, color: '#7a1458' }]}>{money(p.price)}</Text>
+        </View>
+      </View>
+    );
+  }
+
   return (
     <SafeAreaView style={sharedStyles.safe}>
       <ScrollView contentContainerStyle={sharedStyles.container}>
@@ -894,6 +1373,17 @@ export default function AdminPage() {
             <Text style={sharedStyles.hostConfigText}>{apiHost ? `API: ${apiHost}` : 'Config API'}</Text>
           </Pressable>
         </View>
+
+        {/* User Header with profile edit and logout - Below topNav */}
+        {profileUser && (
+          <UserHeader
+            userName={profileUser.name}
+            userRole={profileUser.role}
+            onEditProfile={() => setShowProfileModal(true)}
+            onLogout={() => handleLogout(setProfileUser, router, (msg) => showMsg(msg, 'success'))}
+            backgroundColor="#f7eef8"
+          />
+        )}
 
         {/* Dashboard */}
         {section === 'dash' && (
@@ -1016,60 +1506,16 @@ export default function AdminPage() {
               </Pressable>
             </View>
 
-            {/* Tabla de inventario con nuevas columnas */}
-            <View style={sharedStyles.tableWrap}>
-              <View style={[sharedStyles.tableRow, sharedStyles.tableHead]}>
-                <View style={[sharedStyles.td, { flex: 0.5 }]}><Text style={sharedStyles.tdHeader}>#</Text></View>
-                <View style={[sharedStyles.td, { flex: 0.7 }]}><Text style={sharedStyles.tdHeader}>Img</Text></View>
-                <View style={[sharedStyles.td, { flex: 1.1 }]}><Text style={sharedStyles.tdHeader}>Nombre</Text></View>
-                <View style={[sharedStyles.td, { flex: 0.8 }]}><Text style={sharedStyles.tdHeader}>Categoria</Text></View>
-                <View style={[sharedStyles.td, { flex: 0.7 }]}><Text style={sharedStyles.tdHeader}>Venta</Text></View>
-                <View style={[sharedStyles.td, { flex: 0.7 }]}><Text style={sharedStyles.tdHeader}>Compra</Text></View>
-                <View style={[sharedStyles.td, { flex: 0.5 }]}><Text style={sharedStyles.tdHeader}>Entr.</Text></View>
-                <View style={[sharedStyles.td, { flex: 0.5 }]}><Text style={sharedStyles.tdHeader}>Sal.</Text></View>
-                <View style={[sharedStyles.td, { flex: 0.5 }]}><Text style={sharedStyles.tdHeader}>Stock</Text></View>
-                <View style={[sharedStyles.td, { flex: 0.7 }]}><Text style={sharedStyles.tdHeader}>Estado</Text></View>
-                <View style={[sharedStyles.td, { flex: 1 }]}><Text style={sharedStyles.tdHeader}>Acciones</Text></View>
+            {/* Lista de productos en formato Card */}
+            {inventoryLoading ? (
+              <View style={styles2.card}><Text style={{ color: '#888', fontWeight: '700', textAlign: 'center' }}>Cargando inventario...</Text></View>
+            ) : inventoryProducts.length === 0 ? (
+              <View style={styles2.card}><Text style={{ color: '#888', fontWeight: '700', textAlign: 'center' }}>No se encontraron productos con los filtros actuales</Text></View>
+            ) : (
+              <View style={{ paddingBottom: 8 }}>
+                {inventoryProducts.map((p) => renderProductCard({ item: p, index: inventoryProducts.indexOf(p) }))}
               </View>
-              {inventoryLoading ? (
-                <View style={[sharedStyles.tableRow, sharedStyles.tableBodyRow]}>
-                  <View style={{ flex: 1, alignItems: 'center', padding: 20 }}>
-                    <Text style={{ color: '#888', fontWeight: '700' }}>Cargando inventario...</Text>
-                  </View>
-                </View>
-              ) : inventoryProducts.length === 0 ? (
-                <View style={[sharedStyles.tableRow, sharedStyles.tableBodyRow]}>
-                  <View style={{ flex: 1, alignItems: 'center', padding: 20 }}>
-                    <Text style={{ color: '#888', fontWeight: '700' }}>No se encontraron productos con los filtros actuales</Text>
-                  </View>
-                </View>
-              ) : inventoryProducts.map((p, idx) => (
-                <View style={[sharedStyles.tableRow, sharedStyles.tableBodyRow]} key={String(p.id)}>
-                  <View style={[sharedStyles.td, { flex: 0.5 }]}><Text style={sharedStyles.tdText}>{idx + 1}</Text></View>
-                  <View style={[sharedStyles.td, { flex: 0.7 }]}>
-                    <Image source={{ uri: p.img || 'https://via.placeholder.com/50' }} style={sharedStyles.rowImg} />
-                  </View>
-                  <View style={[sharedStyles.td, { flex: 1.1, paddingRight: 4 }]}><Text style={[sharedStyles.tdText, { fontSize: 11 }]} numberOfLines={1}>{p.name}</Text></View>
-                  <View style={[sharedStyles.td, { flex: 0.8, paddingRight: 4 }]}><Text style={[sharedStyles.tdText, { fontSize: 10 }]} numberOfLines={1}>{p.category}</Text></View>
-                  <View style={[sharedStyles.td, { flex: 0.7 }]}><Text style={[sharedStyles.tdText, sharedStyles.tdPrice, { fontSize: 11 }]}>{money(p.price)}</Text></View>
-                  <View style={[sharedStyles.td, { flex: 0.7 }]}><Text style={[sharedStyles.tdText, { fontSize: 10 }]}>{money(p.valor_compra ?? 0)}</Text></View>
-                  <View style={[sharedStyles.td, { flex: 0.5 }]}><Text style={[sharedStyles.tdText, { fontSize: 11 }]}>{p.cantidad_entrada ?? 0}</Text></View>
-                  <View style={[sharedStyles.td, { flex: 0.5 }]}><Text style={[sharedStyles.tdText, { fontSize: 11 }]}>{p.cantidad_salida ?? 0}</Text></View>
-                  <View style={[sharedStyles.td, { flex: 0.5 }]}>
-                    <Text style={[sharedStyles.tdText, { fontSize: 11, fontWeight: '800', color: (p.stock ?? 0) >= 20 ? '#2d6a4f' : (p.stock ?? 0) > 0 ? '#ffc107' : '#e74c3c' }]}>
-                      {p.stock ?? 0}
-                    </Text>
-                  </View>
-                  <View style={[sharedStyles.td, { flex: 0.7 }]}>
-                    <Text style={[sharedStyles.tdText, { fontSize: 10, fontWeight: '800', color: statusColor(p.status) }]}>{p.status}</Text>
-                  </View>
-                  <View style={[sharedStyles.td, { flexDirection: 'row', flex: 1 }]}>
-                    <Pressable style={sharedStyles.actionBtn} onPress={() => openEditProduct(p)}><Text style={sharedStyles.actionBtnText}>Editar</Text></Pressable>
-                    <Pressable style={sharedStyles.actionBtnOutline} onPress={() => toggleProductStatus(p)}><Text style={sharedStyles.actionBtnOutlineText}>Deshab.</Text></Pressable>
-                  </View>
-                </View>
-              ))}
-            </View>
+            )}
           </>
         )}
 
@@ -1094,33 +1540,37 @@ export default function AdminPage() {
                 <FilterChip key={r} label={r === 'admin' ? 'Admin' : r === 'cliente' ? 'Cliente' : 'Empleado'} active={userRoleFilter === r} onPress={() => setUserRoleFilter(r)} />
               ))}
             </ScrollView>
-            <View style={sharedStyles.tableWrap}>
-              <View style={[sharedStyles.tableRow, sharedStyles.tableHead]}>
-                <Text style={[sharedStyles.td, sharedStyles.tdHeader]}>Nombre</Text>
-                <Text style={[sharedStyles.td, sharedStyles.tdHeader]}>Email</Text>
-                <Text style={[sharedStyles.td, sharedStyles.tdHeader]}>Rol</Text>
-                <Text style={[sharedStyles.td, sharedStyles.tdHeader]}>Estado</Text>
-                <Text style={[sharedStyles.td, sharedStyles.tdHeader]}>Acciones</Text>
-              </View>
-              {users.length === 0 ? (
-                <View style={sharedStyles.tableRow}>
-                  <View style={{ flex: 1, alignItems: 'center', padding: 20 }}>
-                    <Text style={{ color: '#888', fontWeight: '700' }}>No se encontraron usuarios</Text>
-                  </View>
-                </View>
-              ) : users.map((u) => (
-                <View style={sharedStyles.tableRow} key={String(u.id)}>
-                  <View style={sharedStyles.td}><Text style={sharedStyles.tdText}>{u.name}</Text></View>
-                  <View style={sharedStyles.td}><Text style={sharedStyles.tdText}>{u.email}</Text></View>
-                  <View style={sharedStyles.td}><View style={[sharedStyles.roleBadge, { backgroundColor: roleColor(u.role) }]}><Text style={{ color: '#fff', fontWeight: '800' }}>{u.role.toUpperCase()}</Text></View></View>
-                  <View style={sharedStyles.td}><Text style={[sharedStyles.tdText, { fontWeight: '800', color: statusColor(u.status) }]}>{u.status}</Text></View>
-                  <View style={[sharedStyles.td, { flexDirection: 'row' }]}>
-                    <Pressable style={sharedStyles.actionBtn} onPress={() => openEditUser(u)}><Text style={sharedStyles.actionBtnText}>Editar</Text></Pressable>
-                    <Pressable style={sharedStyles.actionBtnOutline} onPress={() => toggleUserStatus(u)}><Text style={sharedStyles.actionBtnOutlineText}>{u.status === 'Activo' ? 'Bloquear' : 'Activar'}</Text></Pressable>
-                  </View>
-                </View>
-              ))}
+
+            {/* Botones de exportación */}
+            <View style={{ flexDirection: 'row', marginTop: 12, marginBottom: 4, gap: 10 }}>
+              <Pressable
+                style={[sharedStyles.actionBtn, { backgroundColor: '#dc3545', minWidth: 120 }]}
+                onPress={handleExportUsersPdf}
+                disabled={usersExporting !== null || users.length === 0}
+              >
+                <Text style={sharedStyles.actionBtnText}>
+                  {usersExporting === 'pdf' ? 'Generando...' : '📄 Exportar PDF'}
+                </Text>
+              </Pressable>
+              <Pressable
+                style={[sharedStyles.actionBtnSuccess, { minWidth: 120 }]}
+                onPress={handleExportUsersExcel}
+                disabled={usersExporting !== null || users.length === 0}
+              >
+                <Text style={sharedStyles.actionBtnSuccessText}>
+                  {usersExporting === 'excel' ? 'Generando...' : '📊 Exportar Excel'}
+                </Text>
+              </Pressable>
             </View>
+
+            {/* Lista de usuarios en formato Card */}
+            {users.length === 0 ? (
+              <View style={styles2.card}><Text style={{ color: '#888', fontWeight: '700', textAlign: 'center' }}>No se encontraron usuarios</Text></View>
+            ) : (
+              <View style={{ paddingBottom: 8 }}>
+                {users.map((u) => <React.Fragment key={u.id}>{renderUserCard({ item: u })}</React.Fragment>)}
+              </View>
+            )}
           </>
         )}
 
@@ -1150,40 +1600,37 @@ export default function AdminPage() {
                 <FilterChip key={e} label={e} active={proveedorEstadoFilter === e} onPress={() => setProveedorEstadoFilter(e)} />
               ))}
             </ScrollView>
-            <View style={sharedStyles.tableWrap}>
-              <View style={[sharedStyles.tableRow, sharedStyles.tableHead]}>
-                <Text style={[sharedStyles.td, sharedStyles.tdHeader, { flex: 1.5 }]}>Nombre</Text>
-                <Text style={[sharedStyles.td, sharedStyles.tdHeader, { flex: 1 }]}>NIT</Text>
-                <Text style={[sharedStyles.td, sharedStyles.tdHeader, { flex: 1 }]}>Contacto</Text>
-                <Text style={[sharedStyles.td, sharedStyles.tdHeader, { flex: 1 }]}>Tel&eacute;fono</Text>
-                <Text style={[sharedStyles.td, sharedStyles.tdHeader, { flex: 1 }]}>Estado</Text>
-                <Text style={[sharedStyles.td, sharedStyles.tdHeader, { flex: 1.5 }]}>Acciones</Text>
-              </View>
-              {proveedores.length === 0 ? (
-                <View style={sharedStyles.tableRow}>
-                  <View style={{ flex: 1, alignItems: 'center', padding: 20 }}>
-                    <Text style={{ color: '#888', fontWeight: '700' }}>No se encontraron proveedores</Text>
-                  </View>
-                </View>
-              ) : proveedores.map((prov) => (
-                <View style={[sharedStyles.tableRow, sharedStyles.tableBodyRow]} key={prov.id}>
-                  <View style={[sharedStyles.td, { flex: 1.5 }]}>
-                    <Text style={sharedStyles.tdText}>{prov.nombre}</Text>
-                    {prov.email ? <Text style={sharedStyles.tdSubText}>{prov.email}</Text> : null}
-                  </View>
-                  <View style={[sharedStyles.td, { flex: 1 }]}><Text style={sharedStyles.tdText}>{prov.nit}</Text></View>
-                  <View style={[sharedStyles.td, { flex: 1 }]}><Text style={sharedStyles.tdText}>{prov.contacto || '—'}</Text></View>
-                  <View style={[sharedStyles.td, { flex: 1 }]}><Text style={sharedStyles.tdText}>{prov.telefono || '—'}</Text></View>
-                  <View style={[sharedStyles.td, { flex: 1 }]}>
-                    <Text style={[sharedStyles.tdText, { fontWeight: '800', color: statusColor(prov.estado) }]}>{prov.estado}</Text>
-                  </View>
-                  <View style={[sharedStyles.td, { flexDirection: 'row', flex: 1.5 }]}>
-                    <Pressable style={sharedStyles.actionBtn} onPress={() => openEditProveedor(prov)}><Text style={sharedStyles.actionBtnText}>Editar</Text></Pressable>
-                    <Pressable style={sharedStyles.actionBtnOutline} onPress={() => toggleProveedorStatus(prov)}><Text style={sharedStyles.actionBtnOutlineText}>{prov.estado === 'Activo' ? 'Desact.' : 'Activar'}</Text></Pressable>
-                  </View>
-                </View>
-              ))}
+
+            {/* Botones de exportación */}
+            <View style={{ flexDirection: 'row', marginTop: 12, marginBottom: 4, gap: 10 }}>
+              <Pressable
+                style={[sharedStyles.actionBtn, { backgroundColor: '#dc3545', minWidth: 120 }]}
+                onPress={handleExportProveedoresPdf}
+                disabled={proveedoresExporting !== null || proveedores.length === 0}
+              >
+                <Text style={sharedStyles.actionBtnText}>
+                  {proveedoresExporting === 'pdf' ? 'Generando...' : '📄 Exportar PDF'}
+                </Text>
+              </Pressable>
+              <Pressable
+                style={[sharedStyles.actionBtnSuccess, { minWidth: 120 }]}
+                onPress={handleExportProveedoresExcel}
+                disabled={proveedoresExporting !== null || proveedores.length === 0}
+              >
+                <Text style={sharedStyles.actionBtnSuccessText}>
+                  {proveedoresExporting === 'excel' ? 'Generando...' : '📊 Exportar Excel'}
+                </Text>
+              </Pressable>
             </View>
+
+            {/* Lista de proveedores en formato Card */}
+            {proveedores.length === 0 ? (
+              <View style={styles2.card}><Text style={{ color: '#888', fontWeight: '700', textAlign: 'center' }}>No se encontraron proveedores</Text></View>
+            ) : (
+              <View style={{ paddingBottom: 8 }}>
+                {proveedores.map((prov) => renderProveedorCard({ item: prov }))}
+              </View>
+            )}
           </>
         )}
 
@@ -1198,91 +1645,36 @@ export default function AdminPage() {
               <Text style={sharedStyles.infoCardText}>Administra el estado de los pedidos: Pendiente &rarr; En proceso &rarr; Enviado &rarr; Entregado. Tambi&eacute;n puedes Cancelar.</Text>
             </View>
 
-            <View style={sharedStyles.tableWrap}>
-              <View style={[sharedStyles.tableRow, sharedStyles.tableHead]}>
-                <Text style={[sharedStyles.td, sharedStyles.tdHeader, { flex: 1 }]}>Pedido</Text>
-                <Text style={[sharedStyles.td, sharedStyles.tdHeader, { flex: 1.2 }]}>Cliente</Text>
-                <Text style={[sharedStyles.td, sharedStyles.tdHeader, { flex: 1.2 }]}>Productos</Text>
-                <Text style={[sharedStyles.td, sharedStyles.tdHeader, { flex: 0.7 }]}>Total</Text>
-                <Text style={[sharedStyles.td, sharedStyles.tdHeader, { flex: 0.8 }]}>Estado</Text>
-                <Text style={[sharedStyles.td, sharedStyles.tdHeader]}>Acci&oacute;n</Text>
-              </View>
-              {ordersDetailed.length === 0 ? (
-                <View style={sharedStyles.tableRow}>
-                  <View style={{ flex: 1, alignItems: 'center', padding: 20 }}>
-                    <Text style={{ color: '#888', fontWeight: '700' }}>No hay pedidos registrados</Text>
-                  </View>
-                </View>
-              ) : ordersDetailed.map((order) => (
-                <View style={[sharedStyles.tableRow, sharedStyles.tableBodyRow]} key={order.id}>
-                  <View style={[sharedStyles.td, { flex: 1 }]}>
-                    <Text style={sharedStyles.tdText}>{order.id}</Text>
-                    <Text style={sharedStyles.tdSubText}>{formatDate(order.date)}</Text>
-                  </View>
-                  <View style={[sharedStyles.td, { flex: 1.2 }]}>
-                    <Text style={sharedStyles.tdText}>{order.user_name}</Text>
-                    <Text style={sharedStyles.tdSubText}>{order.user_email}</Text>
-                  </View>
-                  <View style={[sharedStyles.td, { flex: 1.2 }]}>
-                    {order.products && order.products.length > 0 ? (
-                      order.products.slice(0, 2).map((p, idx) => (
-                        <Text key={idx} style={sharedStyles.tdSubText}>{p.product_name || 'Producto'} x{p.qty}</Text>
-                      ))
-                    ) : <Text style={sharedStyles.tdSubText}>Sin detalle</Text>}
-                    {order.products && order.products.length > 2 && (
-                      <Text style={sharedStyles.tdSubText}>+{order.products.length - 2} m&aacute;s</Text>
-                    )}
-                  </View>
-                  <View style={[sharedStyles.td, { flex: 0.7 }]}>
-                    <Text style={[sharedStyles.tdPrice]}>{money(order.total)}</Text>
-                  </View>
-                  <View style={[sharedStyles.td, { flex: 0.8 }]}>
-                    <Pressable
-                      onPress={() => {
-                        const currentStatus = order.status;
-                        const selectedId = order.id;
-                        // Crear opciones para todos los estados excepto el actual
-                        const options = ORDER_STATUSES
-                          .filter(s => s !== currentStatus)
-                          .map(s => ({
-                            text: s,
-                            onPress: () => updateOrderStatus(selectedId, s)
-                          }));
-                        // Si hay más de 3 opciones, usar Alert con scroll
-                        if (options.length <= 3) {
-                          Alert.alert(
-                            'Cambiar estado',
-                            `Selecciona el nuevo estado para el pedido ${selectedId}`,
-                            [
-                              ...options,
-                              { text: 'Cancelar', style: 'cancel' }
-                            ]
-                          );
-                        } else {
-                          // Para muchas opciones, preguntar primero y luego confirmar
-                          Alert.alert(
-                            'Cambiar estado del pedido',
-                            `Pedido: ${selectedId}\nEstado actual: ${currentStatus}\n\nSelecciona el nuevo estado:`,
-                            [
-                              ...options,
-                              { text: 'Cancelar', style: 'cancel' }
-                            ]
-                          );
-                        }
-                      }}
-                      style={[sharedStyles.statusBadge, { backgroundColor: statusColor(order.status) }]}
-                    >
-                      <Text style={sharedStyles.statusBadgeText}>{order.status} ▾</Text>
-                    </Pressable>
-                  </View>
-                  <View style={[sharedStyles.td, { flex: 0.8 }]}>
-                    <Pressable style={sharedStyles.actionBtn} onPress={() => openOrderDetail(order)}>
-                      <Text style={sharedStyles.actionBtnText}>Gestionar</Text>
-                    </Pressable>
-                  </View>
-                </View>
-              ))}
+            {/* Botones de exportación */}
+            <View style={{ flexDirection: 'row', marginTop: 12, marginBottom: 4, gap: 10 }}>
+              <Pressable
+                style={[sharedStyles.actionBtn, { backgroundColor: '#dc3545', minWidth: 120 }]}
+                onPress={handleExportOrdersPdf}
+                disabled={ordersExporting !== null || ordersDetailed.length === 0}
+              >
+                <Text style={sharedStyles.actionBtnText}>
+                  {ordersExporting === 'pdf' ? 'Generando...' : '📄 Exportar PDF'}
+                </Text>
+              </Pressable>
+              <Pressable
+                style={[sharedStyles.actionBtnSuccess, { minWidth: 120 }]}
+                onPress={handleExportOrdersExcel}
+                disabled={ordersExporting !== null || ordersDetailed.length === 0}
+              >
+                <Text style={sharedStyles.actionBtnSuccessText}>
+                  {ordersExporting === 'excel' ? 'Generando...' : '📊 Exportar Excel'}
+                </Text>
+              </Pressable>
             </View>
+
+            {/* Lista de pedidos en formato Card */}
+            {ordersDetailed.length === 0 ? (
+              <View style={styles2.card}><Text style={{ color: '#888', fontWeight: '700', textAlign: 'center' }}>No hay pedidos registrados</Text></View>
+            ) : (
+              <View style={{ paddingBottom: 8 }}>
+                {ordersDetailed.map((order) => renderOrderCard({ item: order }))}
+              </View>
+            )}
           </>
         )}
 
@@ -1463,6 +1855,28 @@ export default function AdminPage() {
               </Pressable>
             </View>
 
+            {/* Botones de exportación para Analytics */}
+            <View style={{ flexDirection: 'row', marginTop: 8, marginBottom: 4, gap: 10 }}>
+              <Pressable
+                style={[sharedStyles.actionBtn, { backgroundColor: '#dc3545', minWidth: 120 }]}
+                onPress={handleExportTrendingPdf}
+                disabled={trendingExporting !== null || (analyticsTab === 'carrito' ? cartAnalytics : wishlistAnalytics).length === 0}
+              >
+                <Text style={sharedStyles.actionBtnText}>
+                  {trendingExporting === 'pdf' ? 'Generando...' : '📄 Exportar PDF'}
+                </Text>
+              </Pressable>
+              <Pressable
+                style={[sharedStyles.actionBtnSuccess, { minWidth: 120 }]}
+                onPress={handleExportTrendingExcel}
+                disabled={trendingExporting !== null || (analyticsTab === 'carrito' ? cartAnalytics : wishlistAnalytics).length === 0}
+              >
+                <Text style={sharedStyles.actionBtnSuccessText}>
+                  {trendingExporting === 'excel' ? 'Generando...' : '📊 Exportar Excel'}
+                </Text>
+              </Pressable>
+            </View>
+
             {/* Search input for the current analytics tab */}
             <View style={[sharedStyles.searchRow, { marginTop: 0, marginBottom: 4 }]}>
               <TextInput
@@ -1488,59 +1902,16 @@ export default function AdminPage() {
               )}
             </View>
 
-            {/* Analytics Table */}
-            <View style={sharedStyles.tableWrap}>
-              <View style={[sharedStyles.tableRow, sharedStyles.tableHead]}>
-                <Text style={[sharedStyles.td, sharedStyles.tdHeader, { flex: 0.5 }]}>#</Text>
-                <Text style={[sharedStyles.td, sharedStyles.tdHeader, { flex: 1.6 }]}>Producto</Text>
-                <Text style={[sharedStyles.td, sharedStyles.tdHeader, { flex: 1 }]}>Veces Añadido</Text>
-                <Text style={[sharedStyles.td, sharedStyles.tdHeader, { flex: 1 }]}>Usuarios</Text>
-                <Text style={[sharedStyles.td, sharedStyles.tdHeader, { flex: 0.7 }]}>Stock</Text>
+            {/* Analytics Cards */}
+            {analyticsLoading ? (
+              <View style={styles2.card}><Text style={{ color: '#888', fontWeight: '700', textAlign: 'center' }}>Cargando datos...</Text></View>
+            ) : (analyticsTab === 'carrito' ? cartAnalytics : wishlistAnalytics).length === 0 ? (
+              <View style={styles2.card}><Text style={{ color: '#888', fontWeight: '700', textAlign: 'center' }}>No hay datos en {analyticsTab === 'carrito' ? 'carrito' : 'wishlist'}</Text></View>
+            ) : (
+              <View style={{ paddingBottom: 8 }}>
+                {(analyticsTab === 'carrito' ? cartAnalytics : wishlistAnalytics).map((item, idx) => renderAnalyticsCard({ item, index: idx }))}
               </View>
-              {analyticsLoading ? (
-                <View style={[sharedStyles.tableRow, sharedStyles.tableBodyRow]}>
-                  <View style={{ flex: 1, alignItems: 'center', padding: 20 }}>
-                    <Text style={{ color: '#888', fontWeight: '700' }}>Cargando datos...</Text>
-                  </View>
-                </View>
-              ) : (analyticsTab === 'carrito' ? cartAnalytics : wishlistAnalytics).length === 0 ? (
-                <View style={[sharedStyles.tableRow, sharedStyles.tableBodyRow]}>
-                  <View style={{ flex: 1, alignItems: 'center', padding: 20 }}>
-                    <Text style={{ color: '#888', fontWeight: '700' }}>No hay datos en {analyticsTab === 'carrito' ? 'carrito' : 'wishlist'}</Text>
-                  </View>
-                </View>
-              ) : (analyticsTab === 'carrito' ? cartAnalytics : wishlistAnalytics).map((item, idx) => (
-                <View style={[sharedStyles.tableRow, sharedStyles.tableBodyRow]} key={item.id}>
-                  <View style={[sharedStyles.td, { flex: 0.5 }]}>
-                    <Text style={[sharedStyles.tdText, { fontWeight: '700', color: '#999' }]}>
-                      {(analyticsTab === 'carrito' ? cartAnalyticsPage : wishlistAnalyticsPage) === 1 && idx < 3
-                        ? ['🥇', '🥈', '🥉'][idx]
-                        : `#${idx + 1 + ((analyticsTab === 'carrito' ? cartAnalyticsPage : wishlistAnalyticsPage) - 1) * PER_PAGE}`}
-                    </Text>
-                  </View>
-                  <View style={[sharedStyles.td, { flex: 1.6 }]}>
-                    <Text style={sharedStyles.tdText} numberOfLines={2}>{item.name}</Text>
-                    <Text style={sharedStyles.tdSubText}>{money(item.price)}</Text>
-                  </View>
-                  <View style={[sharedStyles.td, { flex: 1 }]}>
-                    <View style={{ backgroundColor: analyticsTab === 'carrito' ? '#f0e8ff' : '#fff0f0', borderRadius: 20, paddingVertical: 4, paddingHorizontal: 10, alignSelf: 'flex-start' }}>
-                      <Text style={{ fontWeight: '900', color: analyticsTab === 'carrito' ? '#7a1458' : '#e74c3c', fontSize: 14 }}>
-                        {item.times_added}x
-                      </Text>
-                    </View>
-                  </View>
-                  <View style={[sharedStyles.td, { flex: 1 }]}>
-                    <Text style={[sharedStyles.tdText, { fontWeight: '700', color: '#0d6efd' }]}>{item.unique_users}</Text>
-                    <Text style={sharedStyles.tdSubText}>usuarios</Text>
-                  </View>
-                  <View style={[sharedStyles.td, { flex: 0.7 }]}>
-                    <Text style={[sharedStyles.tdText, { fontWeight: '800', color: (item.stock ?? 0) > 0 ? '#2d6a4f' : '#e74c3c' }]}>
-                      {item.stock ?? 0}
-                    </Text>
-                  </View>
-                </View>
-              ))}
-            </View>
+            )}
 
             {/* Pagination Controls */}
             {(() => {
@@ -1639,7 +2010,28 @@ export default function AdminPage() {
                 </Text>
               </Pressable>
             </View>
-            <View style={{ flexDirection: 'row', marginBottom: 12 }}>
+            {/* Botones de exportación para Tendencias Populares */}
+            <View style={{ flexDirection: 'row', marginBottom: 12, gap: 10 }}>
+              <Pressable
+                style={[sharedStyles.actionBtn, { backgroundColor: '#dc3545', minWidth: 120 }]}
+                onPress={handleExportTrendingPdf}
+                disabled={trendingExporting !== null || (trendingTab === 'carrito' ? cartTrending : wishlistTrending).length === 0}
+              >
+                <Text style={sharedStyles.actionBtnText}>
+                  {trendingExporting === 'pdf' ? 'Generando...' : '📄 Exportar PDF'}
+                </Text>
+              </Pressable>
+              <Pressable
+                style={[sharedStyles.actionBtnSuccess, { minWidth: 120 }]}
+                onPress={handleExportTrendingExcel}
+                disabled={trendingExporting !== null || (trendingTab === 'carrito' ? cartTrending : wishlistTrending).length === 0}
+              >
+                <Text style={sharedStyles.actionBtnSuccessText}>
+                  {trendingExporting === 'excel' ? 'Generando...' : '📊 Exportar Excel'}
+                </Text>
+              </Pressable>
+            </View>
+            <View style={{ flexDirection: 'row', marginVertical: 12 }}>
               <Pressable
                 onPress={() => setTrendingOrder('DESC')}
                 style={[
@@ -1663,56 +2055,16 @@ export default function AdminPage() {
                 </Text>
               </Pressable>
             </View>
-            <View style={sharedStyles.tableWrap}>
-              <View style={[sharedStyles.tableRow, sharedStyles.tableHead]}>
-                <Text style={[sharedStyles.td, sharedStyles.tdHeader, { flex: 0.5 }]}>#</Text>
-                <Text style={[sharedStyles.td, sharedStyles.tdHeader, { flex: 2 }]}>Producto</Text>
-                <Text style={[sharedStyles.td, sharedStyles.tdHeader, { flex: 1.2 }]}>Categor&iacute;a</Text>
-                <Text style={[sharedStyles.td, sharedStyles.tdHeader, { flex: 0.7 }]}>Stock</Text>
-                <Text style={[sharedStyles.td, sharedStyles.tdHeader, { flex: 1 }]}>
-                  {trendingTab === 'carrito' ? 'Veces en Carrito' : 'Veces en Wishlist'}
-                </Text>
+            {/* Trending Cards */}
+            {trendingLoading ? (
+              <View style={styles2.card}><Text style={{ color: '#888', fontWeight: '700', textAlign: 'center' }}>Cargando tendencias...</Text></View>
+            ) : (trendingTab === 'carrito' ? cartTrending : wishlistTrending).length === 0 ? (
+              <View style={styles2.card}><Text style={{ color: '#888', fontWeight: '700', textAlign: 'center' }}>No hay datos disponibles</Text></View>
+            ) : (
+              <View style={{ paddingBottom: 8 }}>
+                {(trendingTab === 'carrito' ? cartTrending : wishlistTrending).map((item, idx) => renderTrendingCard({ item, index: idx }))}
               </View>
-              {trendingLoading ? (
-                <View style={[sharedStyles.tableRow, sharedStyles.tableBodyRow]}>
-                  <View style={{ flex: 1, alignItems: 'center', padding: 20 }}>
-                    <Text style={{ color: '#888', fontWeight: '700' }}>Cargando tendencias...</Text>
-                  </View>
-                </View>
-              ) : (trendingTab === 'carrito' ? cartTrending : wishlistTrending).length === 0 ? (
-                <View style={[sharedStyles.tableRow, sharedStyles.tableBodyRow]}>
-                  <View style={{ flex: 1, alignItems: 'center', padding: 20 }}>
-                    <Text style={{ color: '#888', fontWeight: '700' }}>No hay datos disponibles</Text>
-                  </View>
-                </View>
-              ) : (trendingTab === 'carrito' ? cartTrending : wishlistTrending).map((item, idx) => (
-                <View style={[sharedStyles.tableRow, sharedStyles.tableBodyRow]} key={item.id}>
-                  <View style={[sharedStyles.td, { flex: 0.5 }]}>
-                    <Text style={[sharedStyles.tdText, { fontWeight: '900', color: idx < 3 ? '#6b124f' : '#999' }]}>
-                      {idx < 3 ? ['🥇', '🥈', '🥉'][idx] : `#${idx + 1}`}
-                    </Text>
-                  </View>
-                  <View style={[sharedStyles.td, { flex: 2 }]}>
-                    <Text style={sharedStyles.tdText} numberOfLines={2}>{item.name}</Text>
-                  </View>
-                  <View style={[sharedStyles.td, { flex: 1.2 }]}>
-                    <Text style={sharedStyles.tdText}>{item.category || '—'}</Text>
-                  </View>
-                  <View style={[sharedStyles.td, { flex: 0.7 }]}>
-                    <Text style={[sharedStyles.tdText, { color: (item.stock ?? 0) > 0 ? '#2d6a4f' : '#e74c3c', fontWeight: '700' }]}>
-                      {item.stock ?? 0}
-                    </Text>
-                  </View>
-                  <View style={[sharedStyles.td, { flex: 1 }]}>
-                    <View style={{ backgroundColor: '#f0e8ff', borderRadius: 20, paddingVertical: 4, paddingHorizontal: 12, alignSelf: 'flex-start' }}>
-                      <Text style={{ fontWeight: '900', color: '#6b124f', fontSize: 14 }}>
-                        {item.total_count}
-                      </Text>
-                    </View>
-                  </View>
-                </View>
-              ))}
-            </View>
+            )}
           </>
         )}
 
@@ -1839,9 +2191,19 @@ export default function AdminPage() {
                     keyboardType="email-address"
                     validate={(v) => validateEmail(v)}
                   />
+                  {!editingUser.id && (
+                    <InputValidado
+                      label="Contraseña *"
+                      value={editingUser.password || ''}
+                      onChangeText={(t) => setEditingUser({ ...editingUser, password: t })}
+                      secureTextEntry
+                      placeholder="Mínimo 6 caracteres"
+                      validate={(v) => v.length === 0 ? { isValid: false, message: 'Ingresa una contraseña' } : v.length < 6 ? { isValid: false, message: 'Mínimo 6 caracteres' } : { isValid: true, message: '' }}
+                    />
+                  )}
                   <Text style={sharedStyles.inputLabel}>Rol *</Text>
                   <View style={{ flexDirection: 'row', marginTop: 6 }}>
-                    {['admin', 'cliente', 'empleado'].map((r) => (
+                    {['admin', 'empleado'].map((r) => (
                       <Pressable key={r} onPress={() => { setEditingUser({ ...editingUser, role: r }); clearUserError('role'); }} style={[sharedStyles.categoryChip, editingUser.role === r && sharedStyles.categoryChipActive, userErrors.role ? sharedStyles.inputError : undefined]}>
                         <Text style={editingUser.role === r ? sharedStyles.categoryChipTextActive : sharedStyles.categoryChipText}>{r.toUpperCase()}</Text>
                       </Pressable>
@@ -2047,25 +2409,8 @@ export default function AdminPage() {
                       No hay productos en este segmento
                     </Text>
                   ) : (
-                    <View style={sharedStyles.tableWrap}>
-                      <View style={[sharedStyles.tableRow, sharedStyles.tableHead]}>
-                        <Text style={[sharedStyles.td, sharedStyles.tdHeader, { flex: 0.5 }]}>#</Text>
-                        <Text style={[sharedStyles.td, sharedStyles.tdHeader, { flex: 2 }]}>Nombre</Text>
-                        <Text style={[sharedStyles.td, sharedStyles.tdHeader, { flex: 0.7 }]}>Stock</Text>
-                        <Text style={[sharedStyles.td, sharedStyles.tdHeader, { flex: 0.8 }]}>Precio</Text>
-                      </View>
-                      {statsModalProducts.map((p, idx) => (
-                        <View style={[sharedStyles.tableRow, sharedStyles.tableBodyRow]} key={String(p.id)}>
-                          <View style={[sharedStyles.td, { flex: 0.5 }]}><Text style={sharedStyles.tdText}>{idx + 1}</Text></View>
-                          <View style={[sharedStyles.td, { flex: 2 }]}><Text style={sharedStyles.tdText}>{p.name}</Text></View>
-                          <View style={[sharedStyles.td, { flex: 0.7 }]}>
-                            <Text style={[sharedStyles.tdText, { fontWeight: '800', color: (p.stock ?? 0) === 0 ? '#e74c3c' : (p.stock ?? 0) < 5 ? '#ffc107' : '#2d6a4f' }]}>
-                              {p.stock ?? 0}
-                            </Text>
-                          </View>
-                          <View style={[sharedStyles.td, { flex: 0.8 }]}><Text style={[sharedStyles.tdText, sharedStyles.tdPrice]}>{money(p.price)}</Text></View>
-                        </View>
-                      ))}
+                    <View style={{ paddingBottom: 8 }}>
+                      {statsModalProducts.map((p, idx) => renderStatsProductCard({ item: p, index: idx }))}
                     </View>
                   )}
                 </ScrollView>
@@ -2074,8 +2419,205 @@ export default function AdminPage() {
           </View>
         </Modal>
 
+        {/* Edit Profile Modal */}
+        <EditProfileForm
+          visible={showProfileModal}
+          onClose={() => setShowProfileModal(false)}
+          currentUser={profileUser}
+          onUserUpdated={(updatedUser) => {
+            setProfileUser(updatedUser);
+            showMsg('Perfil actualizado', 'success');
+          }}
+          showToast={(msg) => showMsg(msg, 'success')}
+        />
+
       </ScrollView>
       {renderMessage()}
     </SafeAreaView>
   );
 }
+
+// ---- MOBILE-FRIENDLY CARD STYLES ----
+const styles2: Record<string, any> = {
+  card: {
+    backgroundColor: '#fff',
+    borderRadius: 18,
+    padding: 16,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#f0dcea',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 4,
+  },
+  compactCard: {
+    backgroundColor: '#fff',
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#f0dcea',
+    elevation: 2,
+  },
+  cardRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  cardImg: {
+    width: 56,
+    height: 56,
+    borderRadius: 12,
+    backgroundColor: '#fdeef7',
+    marginRight: 12,
+  },
+  cardInfo: {
+    flex: 1,
+  },
+  cardTitle: {
+    fontWeight: '900',
+    color: '#2c2c2c',
+    fontSize: 15,
+    marginBottom: 2,
+  },
+  cardSubtitle: {
+    color: '#888',
+    fontSize: 13,
+    marginBottom: 4,
+  },
+  cardSmall: {
+    color: '#888',
+    fontSize: 12,
+    marginBottom: 2,
+  },
+  cardBadgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 4,
+    gap: 8,
+  },
+  cardBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    borderRadius: 10,
+  },
+  cardBadgeText: {
+    color: '#fff',
+    fontWeight: '800',
+    fontSize: 10,
+  },
+  cardStock: {
+    fontWeight: '800',
+    fontSize: 12,
+  },
+  cardDetails: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#f0e6ef',
+    marginTop: 8,
+  },
+  cardDetailItem: {
+    alignItems: 'center',
+  },
+  cardDetailLabel: {
+    color: '#aaa',
+    fontSize: 10,
+    fontWeight: '700',
+    marginBottom: 2,
+  },
+  cardDetailValue: {
+    color: '#2c2c2c',
+    fontWeight: '800',
+    fontSize: 13,
+  },
+  cardActions: {
+    flexDirection: 'row',
+    marginTop: 10,
+    gap: 10,
+  },
+  cardBtn: {
+    backgroundColor: '#0d6efd',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 12,
+    flex: 1,
+    alignItems: 'center',
+  },
+  cardBtnText: {
+    color: '#fff',
+    fontWeight: '900',
+    fontSize: 13,
+  },
+  cardBtnSmall: {
+    backgroundColor: '#0d6efd',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 10,
+  },
+  cardBtnSmallText: {
+    color: '#fff',
+    fontWeight: '900',
+    fontSize: 12,
+  },
+  cardBtnOutline: {
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#dc3545',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 12,
+    flex: 1,
+    alignItems: 'center',
+  },
+  cardBtnOutlineText: {
+    color: '#dc3545',
+    fontWeight: '900',
+    fontSize: 13,
+  },
+  cardPrice: {
+    color: '#7a1458',
+    fontWeight: '900',
+    fontSize: 16,
+  },
+  cardStatus: {
+    fontWeight: '800',
+    fontSize: 13,
+    marginTop: 4,
+  },
+  cardRank: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#f0e8ff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  cardRankText: {
+    fontWeight: '900',
+    color: '#6b124f',
+    fontSize: 12,
+  },
+  roleBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  statusBadge: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 10,
+    alignSelf: 'flex-start',
+  },
+  statusBadgeText: {
+    color: '#fff',
+    fontWeight: '800',
+    fontSize: 11,
+  },
+};

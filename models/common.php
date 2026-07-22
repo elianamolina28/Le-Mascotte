@@ -9,8 +9,11 @@ function sendResponse($data) {
 }
 
 function getValue($key, $default = '') {
-    global $requestBody;
-    return trim($requestBody[$key] ?? ($_GET[$key] ?? $default));
+    $value = $GLOBALS['requestBody'][$key] ?? ($_GET[$key] ?? $default);
+    if (is_array($value)) {
+        return $value;
+    }
+    return trim($value);
 }
 
 /**
@@ -19,12 +22,11 @@ function getValue($key, $default = '') {
  * Esto resuelve el problema de React Native que no envía cookies de sesión de forma confiable.
  */
 function getAuthenticatedUserId() {
-    global $requestBody;
     if (!empty($_SESSION['id_usuario'])) {
         return $_SESSION['id_usuario'];
     }
     // Fallback: user_id enviado explícitamente en el body
-    $userId = $requestBody['user_id'] ?? '';
+    $userId = $GLOBALS['requestBody']['user_id'] ?? '';
     if (!empty($userId)) {
         return $userId;
     }

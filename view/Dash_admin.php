@@ -77,9 +77,13 @@ $editingUser = $editingUser ?? null;?>
     </section>
 
     <section id="view-productos" class="view-section <?php echo $section === 'productos' ? 'active' : ''; ?>">
-      <div style="display: flex; justify-content: space-between; align-items: center;">
+      <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
         <h2>Inventario de Productos</h2>
-        <a class="btn btn-add" href="?section=productos&product_form=new"><i class="fa fa-plus"></i> Nuevo Producto</a>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+          <a class="btn btn-export" href="../api/exportar_excel.php?tipo=productos" target="_blank"><i class="fa fa-file-excel"></i> Exportar Productos</a>
+          <a class="btn btn-export" href="../api/exportar_excel.php?tipo=inventario" target="_blank"><i class="fa fa-chart-simple"></i> Exportar Inventario</a>
+          <a class="btn btn-add" href="?section=productos&product_form=new"><i class="fa fa-plus"></i> Nuevo Producto</a>
+        </div>
       </div>
       <div style="overflow-x: auto;">
         <table class="admin-table">
@@ -111,9 +115,12 @@ $editingUser = $editingUser ?? null;?>
     </section>
 
     <section id="view-usuarios" class="view-section <?php echo $section === 'usuarios' ? 'active' : ''; ?>">
-      <div style="display: flex; justify-content: space-between; align-items: center;">
+      <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
         <h2>Control de Usuarios</h2>
-        <a class="btn btn-add" style="background: var(--morado);" href="?section=usuarios&user_form=new"><i class="fa fa-user-plus"></i> Nuevo Usuario</a>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+          <a class="btn btn-export" href="../api/exportar_excel.php?tipo=usuarios" target="_blank"><i class="fa fa-file-excel"></i> Exportar Usuarios</a>
+          <a class="btn btn-add" style="background: var(--morado);" href="?section=usuarios&user_form=new"><i class="fa fa-user-plus"></i> Nuevo Usuario</a>
+        </div>
       </div>
       <div style="overflow-x: auto;">
         <table class="admin-table">
@@ -144,6 +151,12 @@ $editingUser = $editingUser ?? null;?>
 
     <section id="view-stats" class="view-section <?php echo $section === 'stats' ? 'active' : ''; ?>">
       <h2>Analisis de Ventas</h2>
+      <div style="display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap;">
+        <a class="btn btn-export" href="../api/exportar_excel.php?tipo=productos" target="_blank"><i class="fa fa-file-excel"></i> Exportar Productos</a>
+        <a class="btn btn-export" href="../api/exportar_excel.php?tipo=usuarios" target="_blank"><i class="fa fa-file-excel"></i> Exportar Usuarios</a>
+        <a class="btn btn-export" href="../api/exportar_excel.php?tipo=pedidos" target="_blank"><i class="fa fa-file-excel"></i> Exportar Pedidos</a>
+        <a class="btn btn-export" href="../api/exportar_excel.php?tipo=inventario" target="_blank"><i class="fa fa-chart-simple"></i> Exportar Inventario</a>
+      </div>
       <div class="stats-list">
         <p><strong>Productos registrados:</strong> <?php echo count($products); ?></p>
         <p><strong>Usuarios registrados:</strong> <?php echo count($users); ?></p>

@@ -11,7 +11,7 @@ function getUserByEmail($conexion, $email) {
 }
 
 function getUserById($conexion, $id) {
-    $stmt = mysqli_prepare($conexion, "SELECT id_usuario, nombre_usuario, correo_usuario, rol_usuario, estado_usuario FROM usuario WHERE id_usuario = ?");
+    $stmt = mysqli_prepare($conexion, "SELECT id_usuario, nombre_usuario, correo_usuario, telefono_usuario, direccion_usuario, contrasena_usuario, rol_usuario, estado_usuario FROM usuario WHERE id_usuario = ?");
     mysqli_stmt_bind_param($stmt, 's', $id);
     mysqli_stmt_execute($stmt);
     $result = mysqli_stmt_get_result($stmt);

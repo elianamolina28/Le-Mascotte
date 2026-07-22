@@ -130,10 +130,13 @@ function getOrdersByUser($conexion, $userId) {
 }
 
 function getDashboardOrders($conexion) {
-    $sql = "SELECT id_pedido AS id, fecha_pedido AS date, total_pedido AS total, estado_pedido AS status, id_usuario AS user_id
+    // Parámetros fijos, usando prepared statement para consistencia
+    $stmt = mysqli_prepare($conexion, "SELECT id_pedido AS id, fecha_pedido AS date, total_pedido AS total, estado_pedido AS status, id_usuario AS user_id
             FROM pedido
-            ORDER BY fecha_pedido DESC";
-    $result = mysqli_query($conexion, $sql);
+            ORDER BY fecha_pedido DESC");
+    if (!$stmt) return [];
+    mysqli_stmt_execute($stmt);
+    $result = mysqli_stmt_get_result($stmt);
     $orders = [];
 
     while ($row = mysqli_fetch_assoc($result)) {

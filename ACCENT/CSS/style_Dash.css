@@ -79,12 +79,15 @@
     /* BOTONES */
     .btn { 
       padding: 8px 15px; border-radius: 8px; border: none; cursor: pointer; 
-      font-weight: bold; transition: 0.3s;
+      font-weight: bold; transition: 0.3s; text-decoration: none; display: inline-flex; align-items: center; gap: 6px;
     }
     .btn-main { background: var(--amarillo); color: #333; }
     .btn-add { background: var(--verde); color: white; }
     .btn-danger { background: var(--rojo); color: white; }
     .btn-edit { background: var(--azul); color: white; }
+    .btn-export { background: #217346; color: white; }
+    .btn-export:hover { background: #1a5c38; transform: translateY(-2px); box-shadow: 0 4px 8px rgba(33,115,70,0.3); }
+    .btn-export i { font-size: 1rem; }
 
     .img-table { width: 45px; height: 45px; object-fit: cover; border-radius: 8px; }
     .badge-role { padding: 4px 8px; border-radius: 5px; font-size: 0.75rem; color: white; font-weight: bold; }

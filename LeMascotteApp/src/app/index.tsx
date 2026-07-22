@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'expo-router';
 import {
+  Alert,
   Image,
   ImageBackground,
+  KeyboardAvoidingView,
   Modal,
   Platform,
   Pressable,
@@ -15,6 +17,11 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import InputValidado from '../components/InputValidado';
+import EditProfileForm from '../components/EditProfileForm';
+import UserHeader from '../components/UserHeader';
+import AddressPicker from '../components/AddressPicker';
+import type { AddressPickerErrors } from '../components/AddressPicker';
+import { saveUserSession, handleLogout, getStoredUser, User as AuthUser } from '../../utils/AuthService';
 import { validateEmail, validatePassword, validatePasswordMatch, validateOnlyLetters, validatePhoneCo, validateRequired, validateCedula, validateNumeric } from '../../utils/Validators';
 import type { ValidationResult } from '../components/InputValidado';
 
@@ -72,7 +79,7 @@ type AuthFieldErrors = Partial<
 
 type CheckoutFieldErrors = Partial<
   Record<
-    'cedula' | 'forma_pago' | 'tipo_via' | 'numero_via' | 'letra_via' | 'numero_placa' | 'letra_placa' | 'localidad' | 'complemento',
+    'cedula' | 'forma_pago' | 'codigo_pago' | 'tipo_via' | 'numero_via' | 'letra_via' | 'numero_placa' | 'letra_placa' | 'localidad' | 'complemento',
     string
   >
 >;
@@ -116,7 +123,7 @@ const categoryTiles = [
 
 const money = (value: number) => `$${value.toLocaleString('es-CO')}`;
 
-const XAMPP_HOST = '172.30.4.104'; // Tu IP local (Wi-Fi)
+const XAMPP_HOST = '172.30.5.119'; // Tu IP local (Wi-Fi)
 const XAMPP_PROJECT_PATH = 'Mocap%20Le%20Mascotte.V4.2.0';
 
 const getApiUrl = () => {
@@ -179,14 +186,12 @@ export default function HomeScreen() {
   const [authLoading, setAuthLoading] = useState(false);
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
-  const [loginRole, setLoginRole] = useState('user');
   const [regName, setRegName] = useState('');
   const [regLastname, setRegLastname] = useState('');
   const [regEmail, setRegEmail] = useState('');
   const [regPassword, setRegPassword] = useState('');
   const [regPassword2, setRegPassword2] = useState('');
   const [regPhone, setRegPhone] = useState('');
-  const [regRole, setRegRole] = useState('cliente');
   const [toast, setToast] = useState('');
   const [authErrors, setAuthErrors] = useState<AuthFieldErrors>({});
   const [checkoutLoading, setCheckoutLoading] = useState(false);
@@ -195,6 +200,23 @@ export default function HomeScreen() {
   const [selectedMyOrder, setSelectedMyOrder] = useState<any>(null);
   const [myOrderDetailOpen, setMyOrderDetailOpen] = useState(false);
   const [myOrdersLoading, setMyOrdersLoading] = useState(false);
+  const [editOrderOpen, setEditOrderOpen] = useState(false);
+  const [editingProducts, setEditingProducts] = useState<any[]>([]);
+  const [editOrderLoading, setEditOrderLoading] = useState(false);
+
+  // === PROFILE & LOGOUT STATE ===
+  const [profileUser, setProfileUser] = useState<AuthUser | null>(null);
+  const [showProfileModal, setShowProfileModal] = useState(false);
+
+  // Load stored user on mount
+  useEffect(() => {
+    (async () => {
+      const stored = await getStoredUser();
+      if (stored) {
+        setProfileUser(stored);
+      }
+    })();
+  }, []);
 
   // Checkout form fields
   const [chkCedula, setChkCedula] = useState('');
@@ -206,6 +228,7 @@ export default function HomeScreen() {
   const [chkLetraPlaca, setChkLetraPlaca] = useState('');
   const [chkLocalidad, setChkLocalidad] = useState('');
   const [chkComplemento, setChkComplemento] = useState('');
+  const [chkCodigoPago, setChkCodigoPago] = useState('');
   const [checkoutErrors, setCheckoutErrors] = useState<CheckoutFieldErrors>({});
   const [showFormasPago, setShowFormasPago] = useState(false);
   const [showLocalidades, setShowLocalidades] = useState(false);
@@ -378,7 +401,6 @@ export default function HomeScreen() {
         action: 'login',
         email,
         password: loginPassword,
-        role: loginRole,
       });
 
       if (!response.success) {
@@ -388,6 +410,8 @@ export default function HomeScreen() {
 
       const user = normalizeUser(response.user);
       setCurrentUser(user);
+      setProfileUser(user);
+      if (user) await saveUserSession(user);
       setAuthOpen(false);
       showToast(`¡Bienvenido, ${user?.name || 'usuario'}!`);
 
@@ -453,7 +477,6 @@ export default function HomeScreen() {
         email,
         password: regPassword,
         phone: phoneDigits,
-        role: regRole,
       });
 
       if (!response.success) {
@@ -687,6 +710,240 @@ export default function HomeScreen() {
     setMyOrderDetailOpen(true);
   }
 
+function openEditOrderModal(order: any) {
+    setSelectedMyOrder(order);
+    // Inicializar productos de edición con los productos actuales del pedido
+    // Productos vienen de getOrdersByUser con keys: product_id, qty, unit_price, product_name
+    setEditingProducts(order.products ? [...order.products] : []);
+    setEditOrderOpen(true);
+  }
+
+  function updateEditingProductQty(index: number, delta: number) {
+    setEditingProducts((current) => {
+      const updated = current.map((prod, idx) => {
+        if (idx === index) {
+          const newQty = Math.max(1, prod.qty + delta);
+          return { ...prod, qty: newQty };
+        }
+        return prod;
+      });
+      return updated;
+    });
+  }
+
+  function removeEditingProduct(index: number) {
+    setEditingProducts((current) => current.filter((_, idx) => idx !== index));
+  }
+
+  // Estado de carga para cancelar pedido
+  const [cancellingOrderId, setCancellingOrderId] = useState<string | null>(null);
+
+  async function handleCancelOrder(orderId: string) {
+    if (!currentUser || !currentUser.id) {
+      showToast('Debes iniciar sesión');
+      return;
+    }
+
+    if (cancellingOrderId === orderId) return; // Evitar doble clic
+
+    // Usar confirm de navegador web (más confiable que Alert.alert en web)
+    const confirmed = Platform.OS === 'web' 
+      ? window.confirm('¿Estás seguro de que deseas cancelar este pedido?')
+      : true;
+
+    if (!confirmed) return;
+
+    setCancellingOrderId(orderId);
+    setEditOrderLoading(true);
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+      // Intentar con la IP y con localhost
+      const hosts = [XAMPP_HOST, 'localhost'];
+      let response = null;
+
+      for (const host of hosts) {
+        try {
+          const url = `http://${host}/${XAMPP_PROJECT_PATH}/models/ajax_lemascotte.php`;
+          const resp = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'cancel_order',
+              pedido_id: orderId,
+              user_id: String(currentUser.id)
+            }),
+            signal: controller.signal,
+          });
+          response = resp;
+          break;
+        } catch (e) {
+          continue;
+        }
+      }
+
+      clearTimeout(timeoutId);
+
+      if (!response) {
+        showToast('No se pudo conectar con el servidor');
+        setCancellingOrderId(null);
+        setEditOrderLoading(false);
+        return;
+      }
+
+      const text = await response.text();
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch (e) {
+        showToast('❌ Error: Respuesta inválida del servidor');
+        setCancellingOrderId(null);
+        setEditOrderLoading(false);
+        return;
+      }
+
+      if (data.success) {
+        showToast('✅ Pedido cancelado exitosamente');
+        setMyOrdersOpen(false);
+        await loadMyOrders();
+      } else {
+        showToast(data.message || 'No se pudo cancelar el pedido');
+      }
+    } catch (error) {
+      showToast('Error de conexión. Verifica tu conexión e intenta de nuevo.');
+    } finally {
+      setCancellingOrderId(null);
+      setEditOrderLoading(false);
+    }
+  }
+
+  // Para agregar productos del catálogo al pedido durante edición
+  const [addProductModalOpen, setAddProductModalOpen] = useState(false);
+  const [availableProductsForAdd, setAvailableProductsForAdd] = useState<Product[]>([]);
+  const [selectedAddProductId, setSelectedAddProductId] = useState<string | number>('');
+  const [selectedAddProductQty, setSelectedAddProductQty] = useState(1);
+
+  function openAddProductModal() {
+    // Filtrar los productos que ya están en el pedido
+    const existingIds = editingProducts.map((p: any) => p.product_id || p.id);
+    const available = products.filter(
+      (p) => !existingIds.includes(p.id) && (p.status?.toLowerCase() === 'disponible' || (p.stock && p.stock > 0))
+    );
+    setAvailableProductsForAdd(available);
+    setSelectedAddProductId('');
+    setSelectedAddProductQty(1);
+    setAddProductModalOpen(true);
+  }
+
+  function confirmAddProduct() {
+    if (!selectedAddProductId) {
+      showToast('Selecciona un producto');
+      return;
+    }
+    const product = products.find((p) => p.id === selectedAddProductId);
+    if (!product) return;
+    
+    setEditingProducts((current) => [
+      ...current,
+      {
+        product_id: String(product.id),
+        id: String(product.id),
+        product_name: product.name,
+        qty: selectedAddProductQty,
+        unit_price: product.price,
+        price: product.price,
+      },
+    ]);
+    setAddProductModalOpen(false);
+    showToast(`${product.name} agregado al pedido`);
+  }
+
+  async function handleEditOrder() {
+    if (!currentUser || !currentUser.id) {
+      showToast('Debes iniciar sesión');
+      return;
+    }
+
+    if (!selectedMyOrder || editingProducts.length === 0) {
+      showToast('El pedido debe tener al menos un producto');
+      return;
+    }
+
+    setEditOrderLoading(true);
+
+    // Crear controller con timeout para la petición
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+    try {
+      const productos = editingProducts.map((prod) => ({
+        id: prod.product_id || prod.id,
+        qty: prod.qty,
+        price: prod.unit_price || prod.price,
+      }));
+
+      // Intentar con localhost y con la IP directa
+      const hosts = [XAMPP_HOST, 'localhost'];
+      let response = null;
+      let lastError = null;
+
+      for (const host of hosts) {
+        try {
+          const url = `http://${host}/${XAMPP_PROJECT_PATH}/models/ajax_lemascotte.php`;
+          const resp = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'edit_order',
+              pedido_id: selectedMyOrder.id,
+              user_id: String(currentUser.id),
+              productos: productos,
+            }),
+            signal: controller.signal,
+          });
+          response = resp;
+          break; // Si funcionó, salir del loop
+        } catch (e) {
+          lastError = e;
+          continue;
+        }
+      }
+
+      clearTimeout(timeoutId);
+
+      if (!response) {
+        showToast('No se pudo conectar con el servidor');
+        setEditOrderLoading(false);
+        return;
+      }
+
+      const text = await response.text();
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch (e) {
+        showToast('Respuesta inválida del servidor');
+        setEditOrderLoading(false);
+        return;
+      }
+
+      if (data.success) {
+        showToast('✅ Pedido actualizado exitosamente');
+        setEditOrderOpen(false);
+        await loadMyOrders();
+      } else {
+        showToast(data.message || 'No se pudo actualizar el pedido');
+      }
+    } catch (error) {
+      clearTimeout(timeoutId);
+      showToast('Error de conexión. Verifica tu conexión e intenta de nuevo.');
+    } finally {
+      setEditOrderLoading(false);
+    }
+  }
+
   function openCheckout() {
     if (!currentUser) {
       showToast('Debes iniciar sesión para comprar');
@@ -724,6 +981,23 @@ export default function HomeScreen() {
     if (!chkNumeroVia.trim()) errors.numero_via = 'Ingresa el número de vía';
     if (!chkNumeroPlaca.trim()) errors.numero_placa = 'Ingresa el número de placa';
     if (!chkLocalidad) errors.localidad = 'Selecciona una localidad';
+
+    // Validar código de pago si la forma lo requiere
+    const necesitaCodigoPago = ['Tarjeta Débito', 'Tarjeta Crédito', 'Transferencia Bancaria', 'Nequi', 'Daviplata', 'Bancolombia'].includes(chkFormaPago);
+    if (necesitaCodigoPago && !chkCodigoPago.trim()) {
+      errors.codigo_pago = 'Ingresa el número o código de pago';
+    }
+    if (necesitaCodigoPago && chkCodigoPago.trim()) {
+      if (chkFormaPago === 'Tarjeta Débito' || chkFormaPago === 'Tarjeta Crédito') {
+        if (!/^\d{4}$/.test(chkCodigoPago.trim())) {
+          errors.codigo_pago = 'Deben ser exactamente los últimos 4 dígitos';
+        }
+      } else {
+        if (!/^\d{4,20}$/.test(chkCodigoPago.trim())) {
+          errors.codigo_pago = 'Debe ser un código numérico de 4 a 20 dígitos';
+        }
+      }
+    }
 
     if (Object.keys(errors).length > 0) {
       setCheckoutErrors(errors);
@@ -840,6 +1114,17 @@ export default function HomeScreen() {
             </View>
           </View>
         </View>
+
+        {/* User Header with profile edit and logout - Below header */}
+        {profileUser && (
+          <UserHeader
+            userName={profileUser.name}
+            userRole={profileUser.role}
+            onEditProfile={() => setShowProfileModal(true)}
+            onLogout={() => handleLogout(setProfileUser, router, showToast)}
+            backgroundColor="#ffffff"
+          />
+        )}
 
         <ScrollView
           horizontal
@@ -1063,6 +1348,11 @@ export default function HomeScreen() {
         <View style={styles.modalBackdrop}>
           <Pressable style={styles.modalScrim} onPress={() => setCheckoutOpen(false)} />
           {renderToast()}
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
+            style={{ flex: 1 }}
+          >
           <ScrollView contentContainerStyle={styles.checkoutScroll}>
             <View style={styles.checkoutSheet}>
               <View style={styles.checkoutHeader}>
@@ -1111,102 +1401,58 @@ export default function HomeScreen() {
                   </View>
                 )}
 
-                <Text style={[styles.checkoutSectionTitle, { marginTop: 20 }]}>📍 Dirección de envío</Text>
-
-                <InputValidado
-                  label="Tipo de vía *"
-                  value={chkTipoVia}
-                  onChangeText={(t) => { setChkTipoVia(t); clearCheckoutError('tipo_via'); }}
-                  placeholder="Ej: Carrera, Calle, Avenida, Diagonal"
-                  validate={(v) => validateOnlyLetters(v, 'El tipo de vía')}
-                />
-
-                <View style={styles.checkoutRow}>
-                  <View style={styles.checkoutHalf}>
-                    <InputValidado
-                      label="N° vía *"
-                      value={chkNumeroVia}
-                      onChangeText={(t) => { setChkNumeroVia(t); clearCheckoutError('numero_via'); }}
-                      keyboardType="numeric"
-                      placeholder="Ej: 10"
-                      validate={(v) => validateNumeric(v, 'El número de vía', true)}
-                    />
-                  </View>
-                  <View style={styles.checkoutHalf}>
-                    <InputValidado
-                      label="Letra vía"
-                      value={chkLetraVia}
-                      onChangeText={(t) => { setChkLetraVia(t); clearCheckoutError('letra_via'); }}
-                      placeholder="Ej: A, B, C"
-                      validate={(v) => {
-                        if (!v.trim()) return { isValid: true, message: '' };
-                        if (!/^[a-zA-ZáéíóúÁÉÍÓÚñÑ\s]*$/.test(v)) return { isValid: false, message: 'Solo letras' };
+                {/* Campo de código de pago (tarjetas, transferencia y billeteras) — justo debajo del método de pago */}
+                {['Tarjeta Débito', 'Tarjeta Crédito', 'Transferencia Bancaria', 'Nequi', 'Daviplata', 'Bancolombia'].includes(chkFormaPago) && (
+                  <InputValidado
+                    label="Número o código de pago *"
+                    value={chkCodigoPago}
+                    onChangeText={(t) => { setChkCodigoPago(t); clearCheckoutError('codigo_pago'); }}
+                    keyboardType={Platform.OS === 'web' ? 'default' : 'numeric'}
+                    placeholder={chkFormaPago === 'Transferencia Bancaria' ? 'Ej: 1234567890' : 'Últimos 4 dígitos o código'}
+                    validate={(v) => {
+                      if (chkFormaPago === 'Transferencia Bancaria' || chkFormaPago === 'Nequi' || chkFormaPago === 'Daviplata' || chkFormaPago === 'Bancolombia') {
+                        if (!v.trim()) return { isValid: false, message: 'Ingresa el código de pago' };
+                        if (!/^\d{4,20}$/.test(v.trim())) return { isValid: false, message: 'Debe ser un número de 4 a 20 dígitos' };
                         return { isValid: true, message: '' };
-                      }}
-                    />
-                  </View>
-                </View>
-
-                <View style={styles.checkoutRow}>
-                  <View style={styles.checkoutHalf}>
-                    <InputValidado
-                      label="N° placa *"
-                      value={chkNumeroPlaca}
-                      onChangeText={(t) => { setChkNumeroPlaca(t); clearCheckoutError('numero_placa'); }}
-                      keyboardType="numeric"
-                      placeholder="Ej: 50"
-                      validate={(v) => validateNumeric(v, 'El número de placa', true)}
-                    />
-                  </View>
-                  <View style={styles.checkoutHalf}>
-                    <InputValidado
-                      label="Letra placa"
-                      value={chkLetraPlaca}
-                      onChangeText={(t) => { setChkLetraPlaca(t); clearCheckoutError('letra_placa'); }}
-                      placeholder="Ej: A, B, C"
-                      validate={(v) => {
-                        if (!v.trim()) return { isValid: true, message: '' };
-                        if (!/^[a-zA-ZáéíóúÁÉÍÓÚñÑ\s]*$/.test(v)) return { isValid: false, message: 'Solo letras' };
-                        return { isValid: true, message: '' };
-                      }}
-                    />
-                  </View>
-                </View>
-
-                <Text style={styles.inputLabel}>Localidad (Bogotá D.C.) *</Text>
-                <Pressable
-                  style={[styles.dropdownButton, checkoutErrors.localidad ? styles.inputError : undefined]}
-                  onPress={() => setShowLocalidades(!showLocalidades)}>
-                  <Text style={chkLocalidad ? styles.dropdownButtonText : styles.dropdownPlaceholder}>
-                    {chkLocalidad || 'Selecciona una localidad'}
-                  </Text>
-                  <Text style={styles.dropdownArrow}>{showLocalidades ? '▲' : '▼'}</Text>
-                </Pressable>
-                {renderFieldError(checkoutErrors.localidad)}
-                {showLocalidades && (
-                  <View style={styles.dropdownList}>
-                    <ScrollView style={{ maxHeight: 200 }}>
-                      {localidadesBogota.map((loc) => (
-                        <Pressable
-                          key={loc}
-                          style={[styles.dropdownItem, chkLocalidad === loc && styles.dropdownItemActive]}
-                          onPress={() => { setChkLocalidad(loc); setShowLocalidades(false); clearCheckoutError('localidad'); }}>
-                          <Text style={[styles.dropdownItemText, chkLocalidad === loc && styles.dropdownItemTextActive]}>
-                            {loc}
-                          </Text>
-                        </Pressable>
-                      ))}
-                    </ScrollView>
-                  </View>
+                      }
+                      // Tarjetas: último 4 dígitos
+                      if (!v.trim()) return { isValid: false, message: 'Ingresa los últimos 4 dígitos' };
+                      if (!/^\d{4}$/.test(v.trim())) return { isValid: false, message: 'Debe tener exactamente 4 dígitos' };
+                      return { isValid: true, message: '' };
+                    }}
+                  />
                 )}
 
-                <InputValidado
-                  label="Complemento"
-                  value={chkComplemento}
-                  onChangeText={(t) => { setChkComplemento(t); clearCheckoutError('complemento'); }}
-                  placeholder="Ej: Apartamento 301, Conjunto Cerrado"
-                  multiline
-                  validate={() => ({ isValid: true, message: '' })}
+                <Text style={[styles.checkoutSectionTitle, { marginTop: 20 }]}>📍 Dirección de envío</Text>
+
+                <AddressPicker
+                  tipoVia={chkTipoVia}
+                  setTipoVia={(v) => { setChkTipoVia(v); clearCheckoutError('tipo_via'); }}
+                  numeroVia={chkNumeroVia}
+                  setNumeroVia={(v) => { setChkNumeroVia(v); clearCheckoutError('numero_via'); }}
+                  letraVia={chkLetraVia}
+                  setLetraVia={(v) => { setChkLetraVia(v); clearCheckoutError('letra_via'); }}
+                  numeroPlaca={chkNumeroPlaca}
+                  setNumeroPlaca={(v) => { setChkNumeroPlaca(v); clearCheckoutError('numero_placa'); }}
+                  letraPlaca={chkLetraPlaca}
+                  setLetraPlaca={(v) => { setChkLetraPlaca(v); clearCheckoutError('letra_placa'); }}
+                  localidad={chkLocalidad}
+                  setLocalidad={(v) => { setChkLocalidad(v); clearCheckoutError('localidad'); }}
+                  complemento={chkComplemento}
+                  setComplemento={(v) => { setChkComplemento(v); clearCheckoutError('complemento'); }}
+                  errors={{
+                    tipo_via: checkoutErrors.tipo_via,
+                    numero_via: checkoutErrors.numero_via,
+                    letra_via: checkoutErrors.letra_via,
+                    numero_placa: checkoutErrors.numero_placa,
+                    letra_placa: checkoutErrors.letra_placa,
+                    localidad: checkoutErrors.localidad,
+                  }}
+                  clearError={(field) => {
+                    clearCheckoutError(field as keyof CheckoutFieldErrors);
+                  }}
+                  showLocalidades={showLocalidades}
+                  setShowLocalidades={setShowLocalidades}
                 />
 
                 <View style={styles.checkoutResumen}>
@@ -1234,6 +1480,7 @@ export default function HomeScreen() {
               </View>
             </View>
           </ScrollView>
+          </KeyboardAvoidingView>
         </View>
       </Modal>
 
@@ -1242,6 +1489,11 @@ export default function HomeScreen() {
         <View style={styles.authBackdrop}>
           <Pressable style={styles.authScrim} onPress={() => setAuthOpen(false)} />
           {renderToast()}
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
+            style={{ flex: 1 }}
+          >
           <ScrollView contentContainerStyle={styles.authScroll}>
             <View style={styles.authModal}>
               <Pressable style={styles.authClose} onPress={() => setAuthOpen(false)}>
@@ -1270,28 +1522,6 @@ export default function HomeScreen() {
                     placeholder="********"
                     validate={(v) => validatePassword(v)}
                   />
-
-                  <Text style={styles.inputLabel}>Tipo de usuario</Text>
-                  <View style={styles.roleRow}>
-                    {[
-                      ['user', 'Usuario'],
-                      ['admin', 'Administrador'],
-                      ['empleado', 'Empleado'],
-                    ].map(([value, label]) => (
-                      <Pressable
-                        key={value}
-                        style={[styles.roleChip, loginRole === value && styles.roleChipActive]}
-                        onPress={() => setLoginRole(value)}>
-                        <Text
-                          style={[
-                            styles.roleChipText,
-                            loginRole === value && styles.roleChipTextActive,
-                          ]}>
-                          {label}
-                        </Text>
-                      </Pressable>
-                    ))}
-                  </View>
 
                   <Pressable
                     style={[styles.authSubmit, authLoading && styles.authSubmitDisabled]}
@@ -1371,28 +1601,6 @@ export default function HomeScreen() {
                     validate={(v) => validatePhoneCo(v)}
                   />
 
-                  <Text style={styles.inputLabel}>Registrarse como</Text>
-                  <View style={styles.roleRow}>
-                    {[
-                      ['cliente', 'Cliente'],
-                      ['admin', 'Administrador'],
-                      ['empleado', 'Empleado'],
-                    ].map(([value, label]) => (
-                      <Pressable
-                        key={value}
-                        style={[styles.roleChip, regRole === value && styles.roleChipActive]}
-                        onPress={() => setRegRole(value)}>
-                        <Text
-                          style={[
-                            styles.roleChipText,
-                            regRole === value && styles.roleChipTextActive,
-                          ]}>
-                          {label}
-                        </Text>
-                      </Pressable>
-                    ))}
-                  </View>
-
                   <Pressable
                     style={[styles.authSubmit, authLoading && styles.authSubmitDisabled]}
                     disabled={authLoading}
@@ -1412,6 +1620,437 @@ export default function HomeScreen() {
               )}
             </View>
           </ScrollView>
+          </KeyboardAvoidingView>
+        </View>
+      </Modal>
+
+      {/* Edit Profile Modal for Client */}
+      <EditProfileForm
+        visible={showProfileModal}
+        onClose={() => setShowProfileModal(false)}
+        currentUser={profileUser}
+        onUserUpdated={(updatedUser) => {
+          setProfileUser(updatedUser);
+          showToast('Perfil actualizado');
+        }}
+        showToast={showToast}
+      />
+
+      {/* Mis Pedidos Modal */}
+      <Modal visible={myOrdersOpen} animationType="slide" transparent onRequestClose={() => setMyOrdersOpen(false)}>
+        <View style={styles.modalBackdrop}>
+          <Pressable style={styles.modalScrim} onPress={() => setMyOrdersOpen(false)} />
+          {renderToast()}
+          <View style={styles.myOrdersSheet}>
+            <View style={styles.myOrdersHeader}>
+              <Text style={styles.myOrdersTitle}>📋 Mis Pedidos</Text>
+              <Pressable style={styles.closeButton} onPress={() => setMyOrdersOpen(false)}>
+                <Text style={styles.closeButtonText}>×</Text>
+              </Pressable>
+            </View>
+
+            <ScrollView style={styles.myOrdersBody}>
+              {myOrdersLoading ? (
+                <View style={styles.emptyState}>
+                  <Text style={styles.emptyIcon}>⏳</Text>
+                  <Text style={styles.emptyText}>Cargando pedidos...</Text>
+                </View>
+              ) : myOrders.length === 0 ? (
+                <View style={styles.emptyState}>
+                  <Text style={styles.emptyIcon}>📦</Text>
+                  <Text style={styles.emptyText}>No tienes pedidos realizados</Text>
+                </View>
+              ) : isWide ? (
+                // Vista de tabla para escritorio
+                <View style={styles.ordersTableContainer}>
+                  <ScrollView horizontal>
+                    <View style={styles.ordersTable}>
+                      <View style={styles.ordersTableHeader}>
+                        <Text style={[styles.ordersTableHeaderCell, { width: 100 }]}>ID</Text>
+                        <Text style={[styles.ordersTableHeaderCell, { width: 120 }]}>Fecha</Text>
+                        <Text style={[styles.ordersTableHeaderCell, { flex: 2 }]}>Productos</Text>
+                        <Text style={[styles.ordersTableHeaderCell, { width: 120 }]}>Total</Text>
+                        <Text style={[styles.ordersTableHeaderCell, { width: 120 }]}>Estado</Text>
+                        <Text style={[styles.ordersTableHeaderCell, { width: 180 }]}>Acciones</Text>
+                      </View>
+                      {myOrders.map((order) => (
+                        <View key={order.id} style={styles.ordersTableRow}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', paddingBottom: 8 }}>
+                            <Text style={[styles.ordersTableCell, { width: 100, fontWeight: '900', fontSize: 13 }]}>{order.id}</Text>
+                            <Text style={[styles.ordersTableCell, { width: 120, fontSize: 12 }]}>{new Date(order.date).toLocaleDateString('es-CO')}</Text>
+                            <View style={[styles.ordersTableCell, { flex: 2 }]}>
+                              {order.products && order.products.map((prod: any, idx: number) => (
+                                <Text key={idx} style={styles.orderProductText}>
+                                  {prod.product_name} x{prod.qty}
+                                </Text>
+                              ))}
+                            </View>
+                            <Text style={[styles.ordersTableCell, { width: 120, fontWeight: '900', fontSize: 13 }]}>${order.total.toLocaleString('es-CO')}</Text>
+                            <View style={[styles.ordersTableCell, { width: 120 }]}>
+                              <View style={[
+                                styles.statusBadge,
+                                order.status === 'Pendiente' && styles.statusPending,
+                                order.status === 'Cancelado' && styles.statusCancelled,
+                                order.status === 'Entregado' && styles.statusDelivered,
+                              ]}>
+                                <Text style={[
+                                  styles.statusText,
+                                  order.status === 'Pendiente' && styles.statusPendingText,
+                                  order.status === 'Cancelado' && styles.statusCancelledText,
+                                  order.status === 'Entregado' && styles.statusDeliveredText,
+                                ]}>
+                                  {order.status}
+                                </Text>
+                              </View>
+                            </View>
+                          </View>
+                          <View style={{ flexDirection: 'row', gap: 8, paddingTop: 8, borderTopColor: colors.border, borderTopWidth: 1 }}>
+                            <Pressable
+                              style={[styles.orderActionButton, styles.orderViewButton, { flex: 1 }]}
+                              onPress={() => openMyOrderDetail(order)}
+                            >
+                              <Text style={styles.orderActionButtonText}>👁️ Ver</Text>
+                            </Pressable>
+                            {order.status === 'Pendiente' && (
+                              <>
+                                <Pressable
+                                  style={[styles.orderActionButton, styles.orderEditButton, { flex: 1 }]}
+                                  onPress={() => openEditOrderModal(order)}
+                                >
+                                  <Text style={styles.orderActionButtonText}>✏️ Editar</Text>
+                                </Pressable>
+                                <Pressable
+                                  style={[styles.orderActionButton, styles.orderCancelButton, { flex: 1 }]}
+                                  onPress={() => handleCancelOrder(order.id)}
+                                >
+                                  <Text style={styles.orderActionButtonText}>❌ Cancelar</Text>
+                                </Pressable>
+                              </>
+                            )}
+                          </View>
+                        </View>
+                      ))}
+                    </View>
+                  </ScrollView>
+                </View>
+              ) : (
+                // Vista de cards para móvil
+                <View style={styles.ordersCardsContainer}>
+                  {myOrders.map((order) => (
+                    <View key={order.id} style={styles.orderCard}>
+                      <View style={styles.orderCardHeader}>
+                        <Text style={styles.orderCardId}>Pedido #{order.id}</Text>
+                        <View style={[
+                          styles.statusBadge,
+                          order.status === 'Pendiente' && styles.statusPending,
+                          order.status === 'Cancelado' && styles.statusCancelled,
+                          order.status === 'Entregado' && styles.statusDelivered,
+                        ]}>
+                          <Text style={[
+                            styles.statusText,
+                            order.status === 'Pendiente' && styles.statusPendingText,
+                            order.status === 'Cancelado' && styles.statusCancelledText,
+                            order.status === 'Entregado' && styles.statusDeliveredText,
+                          ]}>
+                            {order.status}
+                          </Text>
+                        </View>
+                      </View>
+
+                      <Text style={styles.orderCardDate}>
+                        📅 {new Date(order.date).toLocaleDateString('es-CO', { year: 'numeric', month: 'long', day: 'numeric' })}
+                      </Text>
+
+                      <View style={styles.orderCardProducts}>
+                        <Text style={styles.orderCardProductsTitle}>Productos:</Text>
+                        {order.products && order.products.map((prod: any, idx: number) => (
+                          <Text key={idx} style={styles.orderCardProductItem}>
+                            • {prod.product_name} x{prod.qty} - ${(prod.qty * prod.unit_price).toLocaleString('es-CO')}
+                          </Text>
+                        ))}
+                      </View>
+
+                      <View style={styles.orderCardFooter}>
+                        <Text style={styles.orderCardTotal}>Total: ${order.total.toLocaleString('es-CO')}</Text>
+                        <View style={styles.orderCardActions}>
+                          <Pressable
+                            style={[styles.orderActionButton, styles.orderViewButton]}
+                            onPress={() => openMyOrderDetail(order)}
+                          >
+                            <Text style={styles.orderActionButtonText}>Ver</Text>
+                          </Pressable>
+                          {order.status === 'Pendiente' && (
+                            <>
+                              <Pressable
+                                style={[styles.orderActionButton, styles.orderEditButton]}
+                                onPress={() => openEditOrderModal(order)}
+                              >
+                                <Text style={styles.orderActionButtonText}>Editar</Text>
+                              </Pressable>
+                              <Pressable
+                                style={[styles.orderActionButton, styles.orderCancelButton]}
+                                onPress={() => handleCancelOrder(order.id)}
+                              >
+                                <Text style={styles.orderActionButtonText}>Cancelar</Text>
+                              </Pressable>
+                            </>
+                          )}
+                        </View>
+                      </View>
+                    </View>
+                  ))}
+                </View>
+              )}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Order Detail Modal */}
+      <Modal visible={myOrderDetailOpen} animationType="slide" transparent onRequestClose={() => setMyOrderDetailOpen(false)}>
+        <View style={styles.modalBackdrop}>
+          <Pressable style={styles.modalScrim} onPress={() => setMyOrderDetailOpen(false)} />
+          {renderToast()}
+          <View style={styles.orderDetailSheet}>
+            <View style={styles.orderDetailHeader}>
+              <Text style={styles.orderDetailTitle}>Detalle del Pedido</Text>
+              <Pressable style={styles.closeButton} onPress={() => setMyOrderDetailOpen(false)}>
+                <Text style={styles.closeButtonText}>×</Text>
+              </Pressable>
+            </View>
+
+            {selectedMyOrder && (
+              <ScrollView style={styles.orderDetailBody}>
+                <View style={styles.orderDetailInfo}>
+                  <View style={styles.orderDetailRow}>
+                    <Text style={styles.orderDetailLabel}>ID del Pedido:</Text>
+                    <Text style={styles.orderDetailValue}>{selectedMyOrder.id}</Text>
+                  </View>
+                  <View style={styles.orderDetailRow}>
+                    <Text style={styles.orderDetailLabel}>Fecha:</Text>
+                    <Text style={styles.orderDetailValue}>
+                      {new Date(selectedMyOrder.date).toLocaleDateString('es-CO', { 
+                        year: 'numeric', 
+                        month: 'long', 
+                        day: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                      })}
+                    </Text>
+                  </View>
+                  <View style={styles.orderDetailRow}>
+                    <Text style={styles.orderDetailLabel}>Estado:</Text>
+                    <View style={[
+                      styles.statusBadge,
+                      selectedMyOrder.status === 'Pendiente' && styles.statusPending,
+                      selectedMyOrder.status === 'Cancelado' && styles.statusCancelled,
+                      selectedMyOrder.status === 'Entregado' && styles.statusDelivered,
+                    ]}>
+                      <Text style={[
+                        styles.statusText,
+                        selectedMyOrder.status === 'Pendiente' && styles.statusPendingText,
+                        selectedMyOrder.status === 'Cancelado' && styles.statusCancelledText,
+                        selectedMyOrder.status === 'Entregado' && styles.statusDeliveredText,
+                      ]}>
+                        {selectedMyOrder.status}
+                      </Text>
+                    </View>
+                  </View>
+                  <View style={styles.orderDetailRow}>
+                    <Text style={styles.orderDetailLabel}>Forma de Pago:</Text>
+                    <Text style={styles.orderDetailValue}>{selectedMyOrder.payment_method || 'No especificada'}</Text>
+                  </View>
+                </View>
+
+                <View style={styles.orderDetailProducts}>
+                  <Text style={styles.orderDetailProductsTitle}>Productos del Pedido</Text>
+                  {selectedMyOrder.products && selectedMyOrder.products.map((prod: any, idx: number) => (
+                    <View key={idx} style={styles.orderDetailProductItem}>
+                      <View style={styles.orderDetailProductInfo}>
+                        <Text style={styles.orderDetailProductName}>{prod.product_name}</Text>
+                        <Text style={styles.orderDetailProductQty}>Cantidad: {prod.qty}</Text>
+                        <Text style={styles.orderDetailProductPrice}>Precio unitario: ${prod.unit_price.toLocaleString('es-CO')}</Text>
+                      </View>
+                      <Text style={styles.orderDetailProductSubtotal}>
+                        ${(prod.qty * prod.unit_price).toLocaleString('es-CO')}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+
+                <View style={styles.orderDetailTotal}>
+                  <Text style={styles.orderDetailTotalLabel}>Total del Pedido</Text>
+                  <Text style={styles.orderDetailTotalValue}>${selectedMyOrder.total.toLocaleString('es-CO')}</Text>
+                </View>
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* Edit Order Modal */}
+      <Modal visible={editOrderOpen} animationType="slide" transparent onRequestClose={() => setEditOrderOpen(false)}>
+        <View style={styles.modalBackdrop}>
+          <Pressable style={styles.modalScrim} onPress={() => setEditOrderOpen(false)} />
+          {renderToast()}
+          <KeyboardAvoidingView
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 20}
+            style={{ flex: 1 }}
+          >
+            <ScrollView contentContainerStyle={styles.editOrderScroll}>
+              <View style={styles.editOrderSheet}>
+                <View style={styles.editOrderHeader}>
+                  <Text style={styles.editOrderTitle}>✏️ Editar Pedido</Text>
+                  <Pressable style={styles.closeButton} onPress={() => setEditOrderOpen(false)}>
+                    <Text style={styles.closeButtonText}>×</Text>
+                  </Pressable>
+                </View>
+
+                {selectedMyOrder && (
+                  <View style={styles.editOrderBody}>
+                    <Text style={styles.editOrderInfo}>
+                      Editando pedido: <Text style={styles.editOrderId}>{selectedMyOrder.id}</Text>
+                    </Text>
+
+                    <Text style={styles.editOrderSectionTitle}>Productos del pedido</Text>
+                    
+                    {editingProducts.map((prod, index) => (
+                      <View key={index} style={styles.editOrderProductItem}>
+                        <View style={styles.editOrderProductInfo}>
+                          <Text style={styles.editOrderProductName}>{prod.product_name}</Text>
+                          <Text style={styles.editOrderProductPrice}>${prod.unit_price.toLocaleString('es-CO')} c/u</Text>
+                        </View>
+                        <View style={styles.editOrderProductActions}>
+                          <Pressable
+                            style={styles.editOrderQtyButton}
+                            onPress={() => updateEditingProductQty(index, -1)}
+                          >
+                            <Text style={styles.editOrderQtyText}>−</Text>
+                          </Pressable>
+                          <Text style={styles.editOrderQtyValue}>{prod.qty}</Text>
+                          <Pressable
+                            style={styles.editOrderQtyButton}
+                            onPress={() => updateEditingProductQty(index, 1)}
+                          >
+                            <Text style={styles.editOrderQtyText}>+</Text>
+                          </Pressable>
+                          <Pressable
+                            style={styles.editOrderRemoveButton}
+                            onPress={() => removeEditingProduct(index)}
+                          >
+                            <Text style={styles.editOrderRemoveText}>🗑️</Text>
+                          </Pressable>
+                        </View>
+                      </View>
+                    ))}
+
+                    {/* Botón para agregar productos del catálogo al pedido */}
+                    <Pressable
+                      style={styles.editOrderAddProductButton}
+                      onPress={openAddProductModal}
+                    >
+                      <Text style={styles.editOrderAddProductText}>➕ Agregar producto del catálogo</Text>
+                    </Pressable>
+
+                    <View style={styles.editOrderTotalRow}>
+                      <Text style={styles.editOrderTotalLabel}>Nuevo Total:</Text>
+                      <Text style={styles.editOrderTotalValue}>
+                        ${editingProducts.reduce((sum, prod) => sum + (prod.qty * prod.unit_price), 0).toLocaleString('es-CO')}
+                      </Text>
+                    </View>
+
+                    <Pressable
+                      style={[styles.editOrderSubmitButton, editOrderLoading && styles.editOrderSubmitDisabled]}
+                      disabled={editOrderLoading || editingProducts.length === 0}
+                      onPress={handleEditOrder}
+                    >
+                      <Text style={styles.editOrderSubmitText}>
+                        {editOrderLoading ? 'Guardando...' : '💾 Guardar Cambios'}
+                      </Text>
+                    </Pressable>
+
+                    <Pressable
+                      style={styles.editOrderCancelButton}
+                      onPress={() => setEditOrderOpen(false)}
+                    >
+                      <Text style={styles.editOrderCancelText}>Cancelar</Text>
+                    </Pressable>
+                  </View>
+                )}
+              </View>
+            </ScrollView>
+          </KeyboardAvoidingView>
+        </View>
+      </Modal>
+
+      {/* Modal para agregar producto al pedido durante edición */}
+      <Modal visible={addProductModalOpen} animationType="slide" transparent onRequestClose={() => setAddProductModalOpen(false)}>
+        <View style={styles.modalBackdrop}>
+          <Pressable style={styles.modalScrim} onPress={() => setAddProductModalOpen(false)} />
+          <View style={styles.addProductSheet}>
+            <View style={styles.myOrdersHeader}>
+              <Text style={styles.myOrdersTitle}>➕ Agregar Producto</Text>
+              <Pressable style={styles.closeButton} onPress={() => setAddProductModalOpen(false)}>
+                <Text style={styles.closeButtonText}>×</Text>
+              </Pressable>
+            </View>
+            <ScrollView style={styles.myOrdersBody}>
+              {availableProductsForAdd.length === 0 ? (
+                <View style={styles.emptyState}>
+                  <Text style={styles.emptyIcon}>📦</Text>
+                  <Text style={styles.emptyText}>No hay más productos disponibles</Text>
+                </View>
+              ) : (
+                <>
+                  <Text style={styles.inputLabel}>Selecciona un producto:</Text>
+                  {availableProductsForAdd.map((product) => (
+                    <Pressable
+                      key={product.id}
+                      style={[
+                        styles.addProductItem,
+                        selectedAddProductId === product.id && styles.addProductItemActive,
+                      ]}
+                      onPress={() => setSelectedAddProductId(product.id)}
+                    >
+                      <View style={styles.addProductItemInfo}>
+                        <Text style={styles.addProductItemName}>{product.name}</Text>
+                        <Text style={styles.addProductItemPrice}>
+                          {money(product.price)} {product.stock ? `| Stock: ${product.stock}` : ''}
+                        </Text>
+                      </View>
+                      {selectedAddProductId === product.id && (
+                        <Text style={styles.addProductItemCheck}>✓</Text>
+                      )}
+                    </Pressable>
+                  ))}
+                  <Text style={[styles.inputLabel, { marginTop: 16 }]}>Cantidad:</Text>
+                  <View style={styles.addProductQtyRow}>
+                    <Pressable
+                      style={styles.editOrderQtyButton}
+                      onPress={() => setSelectedAddProductQty(Math.max(1, selectedAddProductQty - 1))}
+                    >
+                      <Text style={styles.editOrderQtyText}>−</Text>
+                    </Pressable>
+                    <Text style={styles.editOrderQtyValue}>{selectedAddProductQty}</Text>
+                    <Pressable
+                      style={styles.editOrderQtyButton}
+                      onPress={() => setSelectedAddProductQty(selectedAddProductQty + 1)}
+                    >
+                      <Text style={styles.editOrderQtyText}>+</Text>
+                    </Pressable>
+                  </View>
+                  <Pressable
+                    style={[styles.checkoutSubmit, !selectedAddProductId && styles.checkoutButtonDisabled]}
+                    disabled={!selectedAddProductId}
+                    onPress={confirmAddProduct}
+                  >
+                    <Text style={styles.checkoutSubmitText}>Agregar al Pedido</Text>
+                  </Pressable>
+                </>
+              )}
+            </ScrollView>
+          </View>
         </View>
       </Modal>
     </SafeAreaView>
@@ -2418,5 +3057,492 @@ const styles = StyleSheet.create({
   authSwitchLink: {
     color: colors.brown,
     fontWeight: '900',
+  },
+  // Mis Pedidos Styles
+  myOrdersSheet: {
+    maxHeight: '90%',
+    backgroundColor: colors.white,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    overflow: 'hidden',
+  },
+  myOrdersHeader: {
+    borderBottomColor: colors.border,
+    borderBottomWidth: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+  },
+  myOrdersTitle: {
+    color: colors.brown,
+    fontSize: 21,
+    fontWeight: '900',
+  },
+  myOrdersBody: {
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+  },
+  ordersTableContainer: {
+    marginTop: 10,
+  },
+  ordersTable: {
+    minWidth: 900,
+  },
+  ordersTableHeader: {
+    flexDirection: 'row',
+    backgroundColor: colors.brown,
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    marginBottom: 8,
+  },
+  ordersTableHeaderCell: {
+    color: colors.white,
+    fontSize: 13,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
+  ordersTableRow: {
+    backgroundColor: colors.white,
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  ordersTableCell: {
+    color: colors.ink,
+    fontSize: 12,
+    textAlign: 'center',
+    paddingHorizontal: 4,
+  },
+  orderProductText: {
+    fontSize: 11,
+    color: colors.ink,
+    marginVertical: 2,
+  },
+  ordersCardsContainer: {
+    marginTop: 10,
+  },
+  orderCard: {
+    backgroundColor: colors.white,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: 16,
+    marginBottom: 12,
+  },
+  orderCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  orderCardId: {
+    color: colors.brown,
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  orderCardDate: {
+    color: colors.muted,
+    fontSize: 13,
+    marginBottom: 12,
+  },
+  orderCardProducts: {
+    marginBottom: 12,
+    paddingBottom: 12,
+    borderBottomColor: colors.border,
+    borderBottomWidth: 1,
+  },
+  orderCardProductsTitle: {
+    color: colors.ink,
+    fontSize: 14,
+    fontWeight: '800',
+    marginBottom: 8,
+  },
+  orderCardProductItem: {
+    color: colors.ink,
+    fontSize: 13,
+    marginVertical: 2,
+    paddingLeft: 8,
+  },
+  orderCardFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  orderCardTotal: {
+    color: colors.brown,
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  orderCardActions: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  statusBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  statusPending: {
+    backgroundColor: '#fff3cd',
+  },
+  statusCancelled: {
+    backgroundColor: '#f8d7da',
+  },
+  statusDelivered: {
+    backgroundColor: '#d4edda',
+  },
+  statusText: {
+    fontSize: 11,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+  },
+  statusPendingText: {
+    color: '#856404',
+  },
+  statusCancelledText: {
+    color: '#721c24',
+  },
+  statusDeliveredText: {
+    color: '#155724',
+  },
+  orderActionButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+    minWidth: 60,
+    alignItems: 'center',
+  },
+  orderViewButton: {
+    backgroundColor: colors.brown,
+  },
+  orderEditButton: {
+    backgroundColor: colors.gold,
+  },
+  orderCancelButton: {
+    backgroundColor: colors.danger,
+  },
+  orderActionButtonText: {
+    color: colors.white,
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  orderDetailSheet: {
+    maxHeight: '85%',
+    backgroundColor: colors.white,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    overflow: 'hidden',
+  },
+  orderDetailHeader: {
+    borderBottomColor: colors.border,
+    borderBottomWidth: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+  },
+  orderDetailTitle: {
+    color: colors.brown,
+    fontSize: 20,
+    fontWeight: '900',
+  },
+  orderDetailBody: {
+    padding: 18,
+  },
+  orderDetailInfo: {
+    backgroundColor: '#faf5f8',
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 16,
+  },
+  orderDetailRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  orderDetailLabel: {
+    color: colors.muted,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  orderDetailValue: {
+    color: colors.ink,
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  orderDetailProducts: {
+    marginBottom: 16,
+  },
+  orderDetailProductsTitle: {
+    color: colors.brown,
+    fontSize: 16,
+    fontWeight: '900',
+    marginBottom: 12,
+  },
+  orderDetailProductItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomColor: colors.border,
+    borderBottomWidth: 1,
+  },
+  orderDetailProductInfo: {
+    flex: 1,
+  },
+  orderDetailProductName: {
+    color: colors.ink,
+    fontSize: 14,
+    fontWeight: '800',
+    marginBottom: 4,
+  },
+  orderDetailProductQty: {
+    color: colors.muted,
+    fontSize: 12,
+    marginBottom: 2,
+  },
+  orderDetailProductPrice: {
+    color: colors.muted,
+    fontSize: 12,
+  },
+  orderDetailProductSubtotal: {
+    color: colors.brown,
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  orderDetailTotal: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: colors.softPink,
+    padding: 16,
+    borderRadius: 12,
+    marginTop: 12,
+  },
+  orderDetailTotalLabel: {
+    color: colors.brown,
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  orderDetailTotalValue: {
+    color: colors.brown,
+    fontSize: 18,
+    fontWeight: '900',
+  },
+  editOrderSheet: {
+    maxHeight: '90%',
+    backgroundColor: colors.white,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    overflow: 'hidden',
+  },
+  editOrderHeader: {
+    borderBottomColor: colors.border,
+    borderBottomWidth: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+  },
+  editOrderTitle: {
+    color: colors.brown,
+    fontSize: 20,
+    fontWeight: '900',
+  },
+  editOrderScroll: {
+    flexGrow: 1,
+    justifyContent: 'flex-end',
+  },
+  editOrderBody: {
+    padding: 18,
+    paddingBottom: 30,
+  },
+  editOrderInfo: {
+    color: colors.ink,
+    fontSize: 14,
+    marginBottom: 16,
+  },
+  editOrderId: {
+    fontWeight: '900',
+    color: colors.brown,
+  },
+  editOrderSectionTitle: {
+    color: colors.brown,
+    fontSize: 16,
+    fontWeight: '900',
+    marginBottom: 12,
+  },
+  editOrderProductItem: {
+    backgroundColor: '#faf5f8',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 10,
+  },
+  editOrderProductInfo: {
+    marginBottom: 10,
+  },
+  editOrderProductName: {
+    color: colors.ink,
+    fontSize: 14,
+    fontWeight: '800',
+    marginBottom: 4,
+  },
+  editOrderProductPrice: {
+    color: colors.muted,
+    fontSize: 12,
+  },
+  editOrderProductActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  editOrderQtyButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    backgroundColor: colors.softPink,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  editOrderQtyText: {
+    color: colors.brown,
+    fontSize: 18,
+    fontWeight: '900',
+  },
+  editOrderQtyValue: {
+    color: colors.ink,
+    fontSize: 16,
+    fontWeight: '900',
+    minWidth: 30,
+    textAlign: 'center',
+  },
+  editOrderRemoveButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: '#f8d7da',
+  },
+  editOrderRemoveText: {
+    fontSize: 16,
+  },
+  editOrderTotalRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: colors.softPink,
+    padding: 14,
+    borderRadius: 12,
+    marginTop: 16,
+    marginBottom: 16,
+  },
+  editOrderTotalLabel: {
+    color: colors.brown,
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  editOrderTotalValue: {
+    color: colors.brown,
+    fontSize: 18,
+    fontWeight: '900',
+  },
+  editOrderSubmitButton: {
+    backgroundColor: colors.green,
+    borderRadius: 24,
+    paddingVertical: 14,
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  editOrderSubmitDisabled: {
+    opacity: 0.6,
+  },
+  editOrderSubmitText: {
+    color: colors.white,
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  editOrderCancelButton: {
+    backgroundColor: colors.softPink,
+    borderRadius: 24,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  editOrderCancelText: {
+    color: colors.brown,
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  // Add Product Button in Edit Order
+  editOrderAddProductButton: {
+    backgroundColor: colors.white,
+    borderColor: colors.brown,
+    borderWidth: 1.5,
+    borderStyle: 'dashed',
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  editOrderAddProductText: {
+    color: colors.brown,
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  // Add Product Modal
+  addProductSheet: {
+    maxHeight: '80%',
+    backgroundColor: colors.white,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    overflow: 'hidden',
+  },
+  addProductItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#faf5f8',
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 8,
+    borderWidth: 1.5,
+    borderColor: 'transparent',
+  },
+  addProductItemActive: {
+    borderColor: colors.brown,
+    backgroundColor: colors.softPink,
+  },
+  addProductItemInfo: {
+    flex: 1,
+  },
+  addProductItemName: {
+    color: colors.ink,
+    fontSize: 14,
+    fontWeight: '800',
+    marginBottom: 4,
+  },
+  addProductItemPrice: {
+    color: colors.muted,
+    fontSize: 12,
+  },
+  addProductItemCheck: {
+    color: colors.green,
+    fontSize: 20,
+    fontWeight: '900',
+    marginLeft: 8,
+  },
+  addProductQtyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 16,
+    marginBottom: 16,
+    marginTop: 8,
   },
 });

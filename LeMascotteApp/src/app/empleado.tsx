@@ -9,12 +9,18 @@ import {
   Modal,
   TextInput,
   Dimensions,
+  TouchableOpacity,
+  StyleSheet,
 } from 'react-native';
+import { useRouter } from 'expo-router';
 import { BarChart } from 'react-native-chart-kit';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { COLORS, sharedStyles, money, statusColor, roleColor, formatDate, FilterChip } from './shared/styles';
-import { exportToPdf, exportToExcel, ReportRow } from '../../utils/ReportGenerator';
+import { COLORS, sharedStyles, money, statusColor, roleColor, formatDate, FilterChip } from '../shared/styles';
+import { exportToPdf, exportToExcel, exportUsersToPdf, exportUsersToExcel, exportProveedoresToPdf, exportProveedoresToExcel, ReportRow, UserReportRow, ProveedorReportRow } from '../../utils/ReportGenerator';
 import InputValidado from '../components/InputValidado';
+import EditProfileForm from '../components/EditProfileForm';
+import UserHeader from '../components/UserHeader';
+import { handleLogout, getStoredUser, User as AuthUser } from '../../utils/AuthService';
 import { validateOnlyLetters, validateNumeric, validateEmail, validatePhone, validateImageUrl, validateStock, validatePrice, validateNit } from '../../utils/Validators';
 
 type Product = {
@@ -54,7 +60,7 @@ const initialProducts: Product[] = [];
 const initialUsers: User[] = [];
 
 const XAMPP_PROJECT_PATH = 'Mocap%20Le%20Mascotte.V4.2.0';
-const CANDIDATE_HOSTS = ['localhost', '172.30.4.104', '172.30.5.119', '10.0.2.2', '172.20.0.40', '192.168.101.16'];
+const CANDIDATE_HOSTS = ['localhost', '192.168.1.93', '172.30.4.104', '172.30.5.119', '10.0.2.2', '172.20.0.40', '192.168.101.16'];
 const API_HOST_STORAGE_KEY = 'lemascotte_api_host_empleado_v2';
 
 const getApiUrlFromHost = (host: string) => `http://${host}/${XAMPP_PROJECT_PATH}/models/ajax_lemascotte.php`;
@@ -63,6 +69,41 @@ export default function EmpleadoPage() {
   const [apiHost, setApiHost] = useState<string | null>(null);
 
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // === PROFILE & LOGOUT STATE ===
+  const router = useRouter();
+  const [profileUser, setProfileUser] = useState<AuthUser | null>(null);
+  const [showProfileModal, setShowProfileModal] = useState(false);
+
+  // Load stored user on mount
+  useEffect(() => {
+    (async () => {
+      const stored = await getStoredUser();
+      if (stored) {
+        setProfileUser(stored);
+      }
+    })();
+  }, []);
+
+  // AuthGuard: redirect non-employee users away from employee panel
+  useEffect(() => {
+    (async () => {
+      const stored = await getStoredUser();
+      if (!stored) {
+        router.replace('/');
+        return;
+      }
+      const normalized = (stored.role || '').trim().toLowerCase();
+      const isEmployee = normalized.includes('empleado');
+      if (!isEmployee) {
+        if (normalized.includes('admin')) {
+          router.replace('/admin');
+        } else {
+          router.replace('/');
+        }
+      }
+    })();
+  }, [router]);
 
   async function fetchWithTimeout(url: string, opts: any = {}, timeout = 8000) {
     const controller = new AbortController();
@@ -117,6 +158,12 @@ export default function EmpleadoPage() {
   const [inventoryProducts, setInventoryProducts] = useState<Product[]>([]);
   const [inventoryLoading, setInventoryLoading] = useState(false);
   const [exporting, setExporting] = useState<'pdf' | 'excel' | null>(null);
+
+  // === USERS EXPORT STATE ===
+  const [usersExporting, setUsersExporting] = useState<'pdf' | 'excel' | null>(null);
+
+  // === PROVEEDORES EXPORT STATE ===
+  const [proveedoresExporting, setProveedoresExporting] = useState<'pdf' | 'excel' | null>(null);
 
   // === STATS CLICK MODAL ===
   const [statsModalOpen, setStatsModalOpen] = useState(false);
@@ -223,6 +270,57 @@ export default function EmpleadoPage() {
     const ok = await exportToExcel(inventoryRows, 'Inventario - Le Mascotte');
     if (!ok) showMsg('Error al generar Excel', 'error');
     setExporting(null);
+  }
+
+  // === USERS EXPORT HANDLERS ===
+  const userRows: UserReportRow[] = useMemo(() => {
+    return users.map((u) => ({
+      name: u.name,
+      email: u.email,
+      role: u.role,
+      status: u.status || 'Activo',
+    }));
+  }, [users]);
+
+  async function handleExportUsersPdf() {
+    setUsersExporting('pdf');
+    const ok = await exportUsersToPdf(userRows, 'Usuarios - Le Mascotte');
+    if (!ok) showMsg('Error al generar PDF de usuarios', 'error');
+    setUsersExporting(null);
+  }
+
+  async function handleExportUsersExcel() {
+    setUsersExporting('excel');
+    const ok = await exportUsersToExcel(userRows, 'Usuarios - Le Mascotte');
+    if (!ok) showMsg('Error al generar Excel de usuarios', 'error');
+    setUsersExporting(null);
+  }
+
+  // === PROVEEDORES EXPORT HANDLERS ===
+  const proveedorRows: ProveedorReportRow[] = useMemo(() => {
+    return proveedores.map((p) => ({
+      nombre: p.nombre,
+      nit: p.nit,
+      contacto: p.contacto,
+      telefono: p.telefono,
+      email: p.email,
+      direccion: p.direccion,
+      estado: p.estado,
+    }));
+  }, [proveedores]);
+
+  async function handleExportProveedoresPdf() {
+    setProveedoresExporting('pdf');
+    const ok = await exportProveedoresToPdf(proveedorRows, 'Proveedores - Le Mascotte');
+    if (!ok) showMsg('Error al generar PDF de proveedores', 'error');
+    setProveedoresExporting(null);
+  }
+
+  async function handleExportProveedoresExcel() {
+    setProveedoresExporting('excel');
+    const ok = await exportProveedoresToExcel(proveedorRows, 'Proveedores - Le Mascotte');
+    if (!ok) showMsg('Error al generar Excel de proveedores', 'error');
+    setProveedoresExporting(null);
   }
 
   async function handleStatsClick(segmentTitle: string, stockLevel: string) {
@@ -359,7 +457,6 @@ export default function EmpleadoPage() {
       const errors: ProductFieldErrors = {};
       const valorCompra = Number(prod.valor_compra ?? 0);
       const stock = Number(prod.stock ?? 0);
-      // Auto-calculate price with 80% margin if valor_compra is set
       const price = Number(prod.price) > 0 ? Number(prod.price) : (valorCompra > 0 ? Math.round(valorCompra * 1.80 * 100) / 100 : 0);
 
       if (!prod.name.trim()) errors.name = 'Ingresa el nombre del producto';
@@ -494,6 +591,98 @@ export default function EmpleadoPage() {
     setEditingProveedor(null);
   }
 
+  // ---- CARD RENDERERS FOR FLATLIST ----
+  function renderProductCard({ item: p }: { item: Product }) {
+    return (
+      <View style={eStyles.card}>
+        <View style={eStyles.cardRow}>
+          <Image source={{ uri: p.img || 'https://via.placeholder.com/50' }} style={eStyles.cardImg} />
+          <View style={eStyles.cardInfo}>
+            <Text style={eStyles.cardTitle} numberOfLines={2}>{p.name}</Text>
+            <Text style={eStyles.cardSubtitle}>{p.category}</Text>
+            <View style={eStyles.cardBadgeRow}>
+              <View style={[eStyles.cardBadge, { backgroundColor: statusColor(p.status) }]}>
+                <Text style={eStyles.cardBadgeText}>{p.status}</Text>
+              </View>
+              <Text style={[eStyles.cardStock, { color: (p.stock ?? 0) >= 20 ? '#2d6a4f' : (p.stock ?? 0) > 0 ? '#ffc107' : '#e74c3c' }]}>
+                Stock: {p.stock ?? 0}
+              </Text>
+            </View>
+          </View>
+        </View>
+        <View style={eStyles.cardDetails}>
+          <View style={eStyles.cardDetailItem}>
+            <Text style={eStyles.cardDetailLabel}>Venta</Text>
+            <Text style={eStyles.cardDetailValue}>{money(p.price)}</Text>
+          </View>
+          <View style={eStyles.cardDetailItem}>
+            <Text style={eStyles.cardDetailLabel}>Compra</Text>
+            <Text style={eStyles.cardDetailValue}>{money(p.valor_compra ?? 0)}</Text>
+          </View>
+          <View style={eStyles.cardDetailItem}>
+            <Text style={eStyles.cardDetailLabel}>Entr.</Text>
+            <Text style={eStyles.cardDetailValue}>{p.cantidad_entrada ?? 0}</Text>
+          </View>
+          <View style={eStyles.cardDetailItem}>
+            <Text style={eStyles.cardDetailLabel}>Sal.</Text>
+            <Text style={eStyles.cardDetailValue}>{p.cantidad_salida ?? 0}</Text>
+          </View>
+        </View>
+        <View style={eStyles.cardActions}>
+          <TouchableOpacity style={eStyles.cardBtn} onPress={() => openEditProduct(p)}>
+            <Text style={eStyles.cardBtnText}>Editar</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
+
+  function renderUserCard({ item: u }: { item: User }) {
+    return (
+      <View style={eStyles.card}>
+        <View style={eStyles.cardRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={eStyles.cardTitle}>{u.name}</Text>
+            <Text style={eStyles.cardSubtitle}>{u.email}</Text>
+          </View>
+          <View style={[eStyles.roleBadge, { backgroundColor: roleColor(u.role) }]}>
+            <Text style={{ color: '#fff', fontWeight: '800', fontSize: 11 }}>{u.role.toUpperCase()}</Text>
+          </View>
+        </View>
+        <Text style={[eStyles.cardStatus, { color: statusColor(u.status) }]}>{u.status}</Text>
+        <View style={eStyles.cardActions}>
+          <TouchableOpacity style={eStyles.cardBtn} onPress={() => openEditUser(u)}>
+            <Text style={eStyles.cardBtnText}>Editar</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
+
+  function renderProveedorCard({ item: prov }: { item: Proveedor }) {
+    return (
+      <View style={eStyles.card}>
+        <View style={eStyles.cardRow}>
+          <View style={{ flex: 1 }}>
+            <Text style={eStyles.cardTitle}>{prov.nombre}</Text>
+            {prov.email ? <Text style={eStyles.cardSubtitle}>{prov.email}</Text> : null}
+            <Text style={eStyles.cardSmall}>NIT: {prov.nit}</Text>
+          </View>
+          <Text style={[eStyles.cardStatus, { color: statusColor(prov.estado) }]}>{prov.estado}</Text>
+        </View>
+        <View style={eStyles.cardRow}>
+          <Text style={eStyles.cardSmall}>📞 {prov.telefono || '—'}</Text>
+          <Text style={eStyles.cardSmall}>👤 {prov.contacto || '—'}</Text>
+        </View>
+        <View style={eStyles.cardActions}>
+          <TouchableOpacity style={eStyles.cardBtn} onPress={() => openEditProveedor(prov)}>
+            <Text style={eStyles.cardBtnText}>Editar</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
+
   return (
     <SafeAreaView style={sharedStyles.safe}>
       <ScrollView contentContainerStyle={sharedStyles.container}>
@@ -512,6 +701,17 @@ export default function EmpleadoPage() {
             <Pressable style={[sharedStyles.navLink, section === 'stats' && sharedStyles.navLinkActive]} onPress={() => setSection('stats')}><Text style={section === 'stats' ? sharedStyles.navLinkTextActive : sharedStyles.navLinkText}>Estadísticas</Text></Pressable>
           </ScrollView>
         </View>
+
+        {/* User Header with profile edit and logout - Below topNav */}
+        {profileUser && (
+          <UserHeader
+            userName={profileUser.name}
+            userRole={profileUser.role}
+            onEditProfile={() => setShowProfileModal(true)}
+            onLogout={() => handleLogout(setProfileUser, router, (msg) => showMsg(msg, 'success'))}
+            backgroundColor="#f7eef8"
+          />
+        )}
 
         {/* Alerta flotante */}
         {renderMessage()}
@@ -549,7 +749,7 @@ export default function EmpleadoPage() {
           </View>
         )}
 
-        {/* INVENTARIO - Módulo avanzado con filtros y exportación */}
+        {/* INVENTARIO - Formato Card */}
         {section === 'productos' && (
           <>
             <View style={sharedStyles.sectionHeaderRow}>
@@ -557,7 +757,6 @@ export default function EmpleadoPage() {
               <Pressable style={sharedStyles.btnAdd} onPress={openNewProduct}><Text style={sharedStyles.btnAddText}>+ Nuevo Producto</Text></Pressable>
             </View>
 
-            {/* Filtros dinámicos: Nombre, Categoría, Nivel de Stock */}
             <View style={[sharedStyles.searchRow, { marginTop: 12 }]}>
               <TextInput
                 style={sharedStyles.searchInput}
@@ -590,93 +789,31 @@ export default function EmpleadoPage() {
                     inventoryStockLevel === sl.key && sharedStyles.filterChipActive,
                   ]}
                 >
-                  <Text
-                    style={[
-                      sharedStyles.filterChipText,
-                      inventoryStockLevel === sl.key && sharedStyles.filterChipTextActive,
-                    ]}
-                  >
+                  <Text style={[sharedStyles.filterChipText, inventoryStockLevel === sl.key && sharedStyles.filterChipTextActive]}>
                     {sl.label}
                   </Text>
                 </Pressable>
               ))}
             </ScrollView>
 
-            {/* Botones de exportación */}
             <View style={{ flexDirection: 'row', marginTop: 12, marginBottom: 4, gap: 10 }}>
-              <Pressable
-                style={[sharedStyles.actionBtn, { backgroundColor: '#dc3545', minWidth: 120 }]}
-                onPress={handleExportPdf}
-                disabled={exporting !== null || inventoryProducts.length === 0}
-              >
-                <Text style={sharedStyles.actionBtnText}>
-                  {exporting === 'pdf' ? 'Generando...' : '📄 Exportar PDF'}
-                </Text>
+              <Pressable style={[sharedStyles.actionBtn, { backgroundColor: '#dc3545', minWidth: 120 }]} onPress={handleExportPdf} disabled={exporting !== null || inventoryProducts.length === 0}>
+                <Text style={sharedStyles.actionBtnText}>{exporting === 'pdf' ? 'Generando...' : '📄 Exportar PDF'}</Text>
               </Pressable>
-              <Pressable
-                style={[sharedStyles.actionBtnSuccess, { minWidth: 120 }]}
-                onPress={handleExportExcel}
-                disabled={exporting !== null || inventoryProducts.length === 0}
-              >
-                <Text style={sharedStyles.actionBtnSuccessText}>
-                  {exporting === 'excel' ? 'Generando...' : '📊 Exportar Excel'}
-                </Text>
+              <Pressable style={[sharedStyles.actionBtnSuccess, { minWidth: 120 }]} onPress={handleExportExcel} disabled={exporting !== null || inventoryProducts.length === 0}>
+                <Text style={sharedStyles.actionBtnSuccessText}>{exporting === 'excel' ? 'Generando...' : '📊 Exportar Excel'}</Text>
               </Pressable>
             </View>
 
-            {/* Tabla de inventario con nuevas columnas */}
-            <View style={sharedStyles.tableWrap}>
-              <View style={[sharedStyles.tableRow, sharedStyles.tableHead]}>
-                <View style={[sharedStyles.td, { flex: 0.5 }]}><Text style={sharedStyles.tdHeader}>#</Text></View>
-                <View style={[sharedStyles.td, { flex: 0.7 }]}><Text style={sharedStyles.tdHeader}>Img</Text></View>
-                <View style={[sharedStyles.td, { flex: 1.1 }]}><Text style={sharedStyles.tdHeader}>Nombre</Text></View>
-                <View style={[sharedStyles.td, { flex: 0.8 }]}><Text style={sharedStyles.tdHeader}>Categoria</Text></View>
-                <View style={[sharedStyles.td, { flex: 0.7 }]}><Text style={sharedStyles.tdHeader}>Venta</Text></View>
-                <View style={[sharedStyles.td, { flex: 0.7 }]}><Text style={sharedStyles.tdHeader}>Compra</Text></View>
-                <View style={[sharedStyles.td, { flex: 0.5 }]}><Text style={sharedStyles.tdHeader}>Entr.</Text></View>
-                <View style={[sharedStyles.td, { flex: 0.5 }]}><Text style={sharedStyles.tdHeader}>Sal.</Text></View>
-                <View style={[sharedStyles.td, { flex: 0.5 }]}><Text style={sharedStyles.tdHeader}>Stock</Text></View>
-                <View style={[sharedStyles.td, { flex: 0.7 }]}><Text style={sharedStyles.tdHeader}>Estado</Text></View>
-                <View style={[sharedStyles.td, { flex: 1 }]}><Text style={sharedStyles.tdHeader}>Acciones</Text></View>
+            {inventoryLoading ? (
+              <View style={eStyles.card}><Text style={{ color: '#888', fontWeight: '700', textAlign: 'center' }}>Cargando inventario...</Text></View>
+            ) : inventoryProducts.length === 0 ? (
+              <View style={eStyles.card}><Text style={{ color: '#888', fontWeight: '700', textAlign: 'center' }}>No se encontraron productos</Text></View>
+            ) : (
+              <View style={{ paddingBottom: 8 }}>
+                {inventoryProducts.map((p) => renderProductCard({ item: p }))}
               </View>
-              {inventoryLoading ? (
-                <View style={[sharedStyles.tableRow, sharedStyles.tableBodyRow]}>
-                  <View style={{ flex: 1, alignItems: 'center', padding: 20 }}>
-                    <Text style={{ color: '#888', fontWeight: '700' }}>Cargando inventario...</Text>
-                  </View>
-                </View>
-              ) : inventoryProducts.length === 0 ? (
-                <View style={[sharedStyles.tableRow, sharedStyles.tableBodyRow]}>
-                  <View style={{ flex: 1, alignItems: 'center', padding: 20 }}>
-                    <Text style={{ color: '#888', fontWeight: '700' }}>No se encontraron productos con los filtros actuales</Text>
-                  </View>
-                </View>
-              ) : inventoryProducts.map((p, idx) => (
-                <View style={[sharedStyles.tableRow, sharedStyles.tableBodyRow]} key={String(p.id)}>
-                  <View style={[sharedStyles.td, { flex: 0.5 }]}><Text style={sharedStyles.tdText}>{idx + 1}</Text></View>
-                  <View style={[sharedStyles.td, { flex: 0.7 }]}>
-                    <Image source={{ uri: p.img || 'https://via.placeholder.com/50' }} style={sharedStyles.rowImg} />
-                  </View>
-                  <View style={[sharedStyles.td, { flex: 1.1, paddingRight: 4 }]}><Text style={[sharedStyles.tdText, { fontSize: 11 }]} numberOfLines={1}>{p.name}</Text></View>
-                  <View style={[sharedStyles.td, { flex: 0.8, paddingRight: 4 }]}><Text style={[sharedStyles.tdText, { fontSize: 10 }]} numberOfLines={1}>{p.category}</Text></View>
-                  <View style={[sharedStyles.td, { flex: 0.7 }]}><Text style={[sharedStyles.tdText, sharedStyles.tdPrice, { fontSize: 11 }]}>{money(p.price)}</Text></View>
-                  <View style={[sharedStyles.td, { flex: 0.7 }]}><Text style={[sharedStyles.tdText, { fontSize: 10 }]}>{money(p.valor_compra ?? 0)}</Text></View>
-                  <View style={[sharedStyles.td, { flex: 0.5 }]}><Text style={[sharedStyles.tdText, { fontSize: 11 }]}>{p.cantidad_entrada ?? 0}</Text></View>
-                  <View style={[sharedStyles.td, { flex: 0.5 }]}><Text style={[sharedStyles.tdText, { fontSize: 11 }]}>{p.cantidad_salida ?? 0}</Text></View>
-                  <View style={[sharedStyles.td, { flex: 0.5 }]}>
-                    <Text style={[sharedStyles.tdText, { fontSize: 11, fontWeight: '800', color: (p.stock ?? 0) >= 20 ? '#2d6a4f' : (p.stock ?? 0) > 0 ? '#ffc107' : '#e74c3c' }]}>
-                      {p.stock ?? 0}
-                    </Text>
-                  </View>
-                  <View style={[sharedStyles.td, { flex: 0.7 }]}>
-                    <Text style={[sharedStyles.tdText, { fontSize: 10, fontWeight: '800', color: statusColor(p.status) }]}>{p.status}</Text>
-                  </View>
-                  <View style={[sharedStyles.td, { flexDirection: 'row', flex: 1 }]}>
-                    <Pressable style={sharedStyles.actionBtn} onPress={() => openEditProduct(p)}><Text style={sharedStyles.actionBtnText}>Editar</Text></Pressable>
-                  </View>
-                </View>
-              ))}
-            </View>
+            )}
           </>
         )}
 
@@ -690,9 +827,7 @@ export default function EmpleadoPage() {
             <View style={sharedStyles.searchRow}>
               <TextInput style={sharedStyles.searchInput} placeholder="Buscar usuarios..." value={userSearch} onChangeText={setUserSearch} placeholderTextColor="#999" />
               {userSearch !== '' && (
-                <Pressable onPress={() => setUserSearch('')} style={sharedStyles.clearBtn}>
-                  <Text style={sharedStyles.clearBtnText}>✕</Text>
-                </Pressable>
+                <Pressable onPress={() => setUserSearch('')} style={sharedStyles.clearBtn}><Text style={sharedStyles.clearBtnText}>✕</Text></Pressable>
               )}
             </View>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={sharedStyles.filterRow} contentContainerStyle={{ paddingRight: 16 }}>
@@ -701,36 +836,40 @@ export default function EmpleadoPage() {
                 <FilterChip key={r} label={r === 'admin' ? 'Admin' : r === 'cliente' ? 'Cliente' : 'Empleado'} active={userRoleFilter === r} onPress={() => setUserRoleFilter(r)} />
               ))}
             </ScrollView>
-            <View style={sharedStyles.tableWrap}>
-              <View style={[sharedStyles.tableRow, sharedStyles.tableHead]}>
-                <Text style={[sharedStyles.td, sharedStyles.tdHeader]}>Nombre</Text>
-                <Text style={[sharedStyles.td, sharedStyles.tdHeader]}>Email</Text>
-                <Text style={[sharedStyles.td, sharedStyles.tdHeader]}>Rol</Text>
-                <Text style={[sharedStyles.td, sharedStyles.tdHeader]}>Estado</Text>
-                <Text style={[sharedStyles.td, sharedStyles.tdHeader]}>Acciones</Text>
-              </View>
-              {users.length === 0 ? (
-                <View style={sharedStyles.tableRow}>
-                  <View style={{ flex: 1, alignItems: 'center', padding: 20 }}>
-                    <Text style={{ color: '#888', fontWeight: '700' }}>No se encontraron usuarios</Text>
-                  </View>
-                </View>
-              ) : users.map((u) => (
-                <View style={sharedStyles.tableRow} key={String(u.id)}>
-                  <View style={sharedStyles.td}><Text style={sharedStyles.tdText}>{u.name}</Text></View>
-                  <View style={sharedStyles.td}><Text style={sharedStyles.tdText}>{u.email}</Text></View>
-                  <View style={sharedStyles.td}><View style={[sharedStyles.roleBadge, { backgroundColor: roleColor(u.role) }]}><Text style={{ color: '#fff', fontWeight: '800' }}>{u.role.toUpperCase()}</Text></View></View>
-                  <View style={sharedStyles.td}><Text style={[sharedStyles.tdText, { fontWeight: '800', color: statusColor(u.status) }]}>{u.status}</Text></View>
-                  <View style={[sharedStyles.td, { flexDirection: 'row' }]}>
-                    <Pressable style={sharedStyles.actionBtn} onPress={() => openEditUser(u)}><Text style={sharedStyles.actionBtnText}>Editar</Text></Pressable>
-                  </View>
-                </View>
-              ))}
+
+            {/* Botones de exportación */}
+            <View style={{ flexDirection: 'row', marginTop: 12, marginBottom: 4, gap: 10 }}>
+              <Pressable
+                style={[sharedStyles.actionBtn, { backgroundColor: '#dc3545', minWidth: 120 }]}
+                onPress={handleExportUsersPdf}
+                disabled={usersExporting !== null || users.length === 0}
+              >
+                <Text style={sharedStyles.actionBtnText}>
+                  {usersExporting === 'pdf' ? 'Generando...' : '📄 Exportar PDF'}
+                </Text>
+              </Pressable>
+              <Pressable
+                style={[sharedStyles.actionBtnSuccess, { minWidth: 120 }]}
+                onPress={handleExportUsersExcel}
+                disabled={usersExporting !== null || users.length === 0}
+              >
+                <Text style={sharedStyles.actionBtnSuccessText}>
+                  {usersExporting === 'excel' ? 'Generando...' : '📊 Exportar Excel'}
+                </Text>
+              </Pressable>
             </View>
+
+            {users.length === 0 ? (
+              <View style={eStyles.card}><Text style={{ color: '#888', fontWeight: '700', textAlign: 'center' }}>No se encontraron usuarios</Text></View>
+            ) : (
+              <View style={{ paddingBottom: 8 }}>
+                {users.map((u) => <React.Fragment key={u.id}>{renderUserCard({ item: u })}</React.Fragment>)}
+              </View>
+            )}
           </>
         )}
 
-        {/* ================== PROVEEDORES ================== */}
+        {/* Proveedores */}
         {section === 'proveedores' && (
           <>
             <View style={sharedStyles.sectionHeaderRow}>
@@ -738,16 +877,12 @@ export default function EmpleadoPage() {
               <Pressable style={sharedStyles.btnAdd} onPress={openNewProveedor}><Text style={sharedStyles.btnAddText}>+ Nuevo Proveedor</Text></Pressable>
             </View>
             <View style={sharedStyles.infoCard}>
-              <Text style={sharedStyles.infoCardText}>
-                Administra los proveedores de Le Mascotte. Registra nombre, contacto, NIT/ID fiscal, dirección y más.
-              </Text>
+              <Text style={sharedStyles.infoCardText}>Administra los proveedores de Le Mascotte. Registra nombre, contacto, NIT/ID fiscal, dirección y más.</Text>
             </View>
             <View style={sharedStyles.searchRow}>
               <TextInput style={sharedStyles.searchInput} placeholder="Buscar por nombre, NIT o contacto..." value={proveedorSearch} onChangeText={setProveedorSearch} placeholderTextColor="#999" />
               {proveedorSearch !== '' && (
-                <Pressable onPress={() => setProveedorSearch('')} style={sharedStyles.clearBtn}>
-                  <Text style={sharedStyles.clearBtnText}>✕</Text>
-                </Pressable>
+                <Pressable onPress={() => setProveedorSearch('')} style={sharedStyles.clearBtn}><Text style={sharedStyles.clearBtnText}>✕</Text></Pressable>
               )}
             </View>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={sharedStyles.filterRow} contentContainerStyle={{ paddingRight: 16 }}>
@@ -756,39 +891,36 @@ export default function EmpleadoPage() {
                 <FilterChip key={e} label={e} active={proveedorEstadoFilter === e} onPress={() => setProveedorEstadoFilter(e)} />
               ))}
             </ScrollView>
-            <View style={sharedStyles.tableWrap}>
-              <View style={[sharedStyles.tableRow, sharedStyles.tableHead]}>
-                <Text style={[sharedStyles.td, sharedStyles.tdHeader, { flex: 1.5 }]}>Nombre</Text>
-                <Text style={[sharedStyles.td, sharedStyles.tdHeader, { flex: 1 }]}>NIT</Text>
-                <Text style={[sharedStyles.td, sharedStyles.tdHeader, { flex: 1 }]}>Contacto</Text>
-                <Text style={[sharedStyles.td, sharedStyles.tdHeader, { flex: 1 }]}>Teléfono</Text>
-                <Text style={[sharedStyles.td, sharedStyles.tdHeader, { flex: 1 }]}>Estado</Text>
-                <Text style={[sharedStyles.td, sharedStyles.tdHeader, { flex: 1.5 }]}>Acciones</Text>
-              </View>
-              {proveedores.length === 0 ? (
-                <View style={sharedStyles.tableRow}>
-                  <View style={{ flex: 1, alignItems: 'center', padding: 20 }}>
-                    <Text style={{ color: '#888', fontWeight: '700' }}>No se encontraron proveedores</Text>
-                  </View>
-                </View>
-              ) : proveedores.map((prov) => (
-                <View style={[sharedStyles.tableRow, sharedStyles.tableBodyRow]} key={prov.id}>
-                  <View style={[sharedStyles.td, { flex: 1.5 }]}>
-                    <Text style={sharedStyles.tdText}>{prov.nombre}</Text>
-                    {prov.email ? <Text style={sharedStyles.tdSubText}>{prov.email}</Text> : null}
-                  </View>
-                  <View style={[sharedStyles.td, { flex: 1 }]}><Text style={sharedStyles.tdText}>{prov.nit}</Text></View>
-                  <View style={[sharedStyles.td, { flex: 1 }]}><Text style={sharedStyles.tdText}>{prov.contacto || '—'}</Text></View>
-                  <View style={[sharedStyles.td, { flex: 1 }]}><Text style={sharedStyles.tdText}>{prov.telefono || '—'}</Text></View>
-                  <View style={[sharedStyles.td, { flex: 1 }]}>
-                    <Text style={[sharedStyles.tdText, { fontWeight: '800', color: statusColor(prov.estado) }]}>{prov.estado}</Text>
-                  </View>
-                  <View style={[sharedStyles.td, { flexDirection: 'row', flex: 1.5 }]}>
-                    <Pressable style={sharedStyles.actionBtn} onPress={() => openEditProveedor(prov)}><Text style={sharedStyles.actionBtnText}>Editar</Text></Pressable>
-                  </View>
-                </View>
-              ))}
+
+            {/* Botones de exportación */}
+            <View style={{ flexDirection: 'row', marginTop: 12, marginBottom: 4, gap: 10 }}>
+              <Pressable
+                style={[sharedStyles.actionBtn, { backgroundColor: '#dc3545', minWidth: 120 }]}
+                onPress={handleExportProveedoresPdf}
+                disabled={proveedoresExporting !== null || proveedores.length === 0}
+              >
+                <Text style={sharedStyles.actionBtnText}>
+                  {proveedoresExporting === 'pdf' ? 'Generando...' : '📄 Exportar PDF'}
+                </Text>
+              </Pressable>
+              <Pressable
+                style={[sharedStyles.actionBtnSuccess, { minWidth: 120 }]}
+                onPress={handleExportProveedoresExcel}
+                disabled={proveedoresExporting !== null || proveedores.length === 0}
+              >
+                <Text style={sharedStyles.actionBtnSuccessText}>
+                  {proveedoresExporting === 'excel' ? 'Generando...' : '📊 Exportar Excel'}
+                </Text>
+              </Pressable>
             </View>
+
+            {proveedores.length === 0 ? (
+              <View style={eStyles.card}><Text style={{ color: '#888', fontWeight: '700', textAlign: 'center' }}>No se encontraron proveedores</Text></View>
+            ) : (
+              <View style={{ paddingBottom: 8 }}>
+                {proveedores.map((prov) => renderProveedorCard({ item: prov }))}
+              </View>
+            )}
           </>
         )}
 
@@ -798,7 +930,6 @@ export default function EmpleadoPage() {
             <View style={sharedStyles.sectionHeaderRow}>
               <Text style={sharedStyles.sectionTitle}>📊 Estadísticas Avanzadas</Text>
             </View>
-            {/* Stock Metric Cards */}
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', marginTop: 12 }}>
               <View style={{ width: '48%', backgroundColor: '#fff', borderRadius: 16, padding: 16, marginBottom: 10, borderLeftWidth: 5, borderLeftColor: '#ffc107', elevation: 3 }}>
                 <Text style={{ fontSize: 28, fontWeight: '900', color: '#ffc107' }}>{productStats?.low_stock ?? 0}</Text>
@@ -808,7 +939,7 @@ export default function EmpleadoPage() {
               <View style={{ width: '48%', backgroundColor: '#fff', borderRadius: 16, padding: 16, marginBottom: 10, borderLeftWidth: 5, borderLeftColor: '#2d6a4f', elevation: 3 }}>
                 <Text style={{ fontSize: 28, fontWeight: '900', color: '#2d6a4f' }}>{productStats?.high_stock ?? 0}</Text>
                 <Text style={{ fontSize: 13, color: '#666', fontWeight: '700', marginTop: 4 }}>Stock Alto</Text>
-                <Text style={{ fontSize: 11, color: '#999', marginTop: 2 }}>{'Productos con \u226520 uds.'}</Text>
+                <Text style={{ fontSize: 11, color: '#999', marginTop: 2 }}>{'Productos con ≥20 uds.'}</Text>
               </View>
               <View style={{ width: '48%', backgroundColor: '#fff', borderRadius: 16, padding: 16, marginBottom: 10, borderLeftWidth: 5, borderLeftColor: '#e74c3c', elevation: 3 }}>
                 <Text style={{ fontSize: 28, fontWeight: '900', color: '#e74c3c' }}>{productStats?.out_of_stock ?? 0}</Text>
@@ -821,13 +952,12 @@ export default function EmpleadoPage() {
                 <Text style={{ fontSize: 11, color: '#999', marginTop: 2 }}>Unidades totales</Text>
               </View>
             </View>
-            {/* Bar Chart */}
             {productStats && productStats.categories && productStats.categories.length > 0 ? (
               <View style={{ marginTop: 16, backgroundColor: '#fff', borderRadius: 18, padding: 16, elevation: 4 }}>
                 <Text style={{ fontWeight: '900', fontSize: 16, color: '#6b124f', marginBottom: 12, textAlign: 'center' }}>Productos por Categoría</Text>
                 <BarChart
                   data={{
-                    labels: productStats.categories.map(c => c.name.length > 8 ? c.name.substring(0, 7) + '\u2026' : c.name),
+                    labels: productStats.categories.map(c => c.name.length > 8 ? c.name.substring(0, 7) + '…' : c.name),
                     datasets: [{ data: productStats.categories.map(c => c.count || 0.1) }],
                   }}
                   width={Dimensions.get('window').width - 68}
@@ -852,7 +982,6 @@ export default function EmpleadoPage() {
                 <Text style={{ color: '#888', fontWeight: '700' }}>No hay datos de categorías disponibles</Text>
               </View>
             )}
-            {/* Summary card */}
             <View style={{ marginTop: 12, backgroundColor: '#f0e8ff', borderRadius: 14, padding: 16, borderLeftWidth: 4, borderLeftColor: '#6b124f' }}>
               <Text style={{ fontWeight: '800', color: '#6b124f', fontSize: 15, marginBottom: 4 }}>📦 Resumen de Productos</Text>
               <Text style={{ color: '#555', fontSize: 13, lineHeight: 20 }}>
@@ -866,7 +995,7 @@ export default function EmpleadoPage() {
 
         <View style={{ height: 40 }} />
 
-        {/* Product Modal - scrollable */}
+        {/* Product Modal */}
         <Modal visible={showProductModal} animationType="slide" transparent>
           <View style={sharedStyles.modalBackdrop}>
             {renderMessage()}
@@ -875,20 +1004,8 @@ export default function EmpleadoPage() {
               <ScrollView style={{ maxHeight: 450 }} contentContainerStyle={{ paddingBottom: 20 }}>
               {editingProduct && (
                 <View>
-                  <InputValidado
-                    label="Nombre *"
-                    value={editingProduct.name}
-                    onChangeText={(t) => setEditingProduct({ ...editingProduct, name: t })}
-                    validate={(v) => validateOnlyLetters(v, 'El nombre')}
-                  />
-                  <InputValidado
-                    label="Descripción"
-                    value={editingProduct.desc ?? ''}
-                    onChangeText={(t) => setEditingProduct({ ...editingProduct, desc: t })}
-                    validate={() => ({ isValid: true, message: '' })}
-                    multiline
-                    maxHeight={80}
-                  />
+                  <InputValidado label="Nombre *" value={editingProduct.name} onChangeText={(t) => setEditingProduct({ ...editingProduct, name: t })} validate={(v) => validateOnlyLetters(v, 'El nombre')} />
+                  <InputValidado label="Descripción" value={editingProduct.desc ?? ''} onChangeText={(t) => setEditingProduct({ ...editingProduct, desc: t })} validate={() => ({ isValid: true, message: '' })} multiline maxHeight={80} />
                   <Text style={sharedStyles.inputLabel}>Categoría *</Text>
                   <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginTop: 6 }}>
                     {categories.map((c) => (
@@ -898,47 +1015,12 @@ export default function EmpleadoPage() {
                     ))}
                   </View>
                   {fieldError(productErrors.category)}
-                  <InputValidado
-                    label="Precio de Venta *"
-                    value={String(editingProduct.price)}
-                    onChangeText={(t) => setEditingProduct({ ...editingProduct, price: Number(t || 0) })}
-                    keyboardType="numeric"
-                    validate={(v) => validatePrice(v, 'El precio')}
-                  />
-                  <InputValidado
-                    label="Valor Compra"
-                    value={String(editingProduct.valor_compra ?? 0)}
-                    onChangeText={(t) => setEditingProduct({ ...editingProduct, valor_compra: Number(t || 0) })}
-                    keyboardType="numeric"
-                    validate={(v) => validateNumeric(v, 'El valor', true)}
-                  />
-                  <InputValidado
-                    label="Cantidad Entrada"
-                    value={String(editingProduct.cantidad_entrada ?? 0)}
-                    onChangeText={(t) => setEditingProduct({ ...editingProduct, cantidad_entrada: Number(t || 0) })}
-                    keyboardType="numeric"
-                    validate={(v) => validateNumeric(v, 'La cantidad', true)}
-                  />
-                  <InputValidado
-                    label="Cantidad Salida"
-                    value={String(editingProduct.cantidad_salida ?? 0)}
-                    onChangeText={(t) => setEditingProduct({ ...editingProduct, cantidad_salida: Number(t || 0) })}
-                    keyboardType="numeric"
-                    validate={(v) => validateNumeric(v, 'La cantidad', true)}
-                  />
-                  <InputValidado
-                    label="Stock *"
-                    value={String(editingProduct.stock ?? '')}
-                    onChangeText={(t) => setEditingProduct({ ...editingProduct, stock: Number(t || 0) })}
-                    keyboardType="numeric"
-                    validate={(v) => validateStock(v)}
-                  />
-                  <InputValidado
-                    label="URL Imagen"
-                    value={editingProduct.img ?? ''}
-                    onChangeText={(t) => setEditingProduct({ ...editingProduct, img: t })}
-                    validate={(v) => validateImageUrl(v)}
-                  />
+                  <InputValidado label="Precio de Venta *" value={String(editingProduct.price)} onChangeText={(t) => setEditingProduct({ ...editingProduct, price: Number(t || 0) })} keyboardType="numeric" validate={(v) => validatePrice(v, 'El precio')} />
+                  <InputValidado label="Valor Compra" value={String(editingProduct.valor_compra ?? 0)} onChangeText={(t) => setEditingProduct({ ...editingProduct, valor_compra: Number(t || 0) })} keyboardType="numeric" validate={(v) => validateNumeric(v, 'El valor', true)} />
+                  <InputValidado label="Cantidad Entrada" value={String(editingProduct.cantidad_entrada ?? 0)} onChangeText={(t) => setEditingProduct({ ...editingProduct, cantidad_entrada: Number(t || 0) })} keyboardType="numeric" validate={(v) => validateNumeric(v, 'La cantidad', true)} />
+                  <InputValidado label="Cantidad Salida" value={String(editingProduct.cantidad_salida ?? 0)} onChangeText={(t) => setEditingProduct({ ...editingProduct, cantidad_salida: Number(t || 0) })} keyboardType="numeric" validate={(v) => validateNumeric(v, 'La cantidad', true)} />
+                  <InputValidado label="Stock *" value={String(editingProduct.stock ?? '')} onChangeText={(t) => setEditingProduct({ ...editingProduct, stock: Number(t || 0) })} keyboardType="numeric" validate={(v) => validateStock(v)} />
+                  <InputValidado label="URL Imagen" value={editingProduct.img ?? ''} onChangeText={(t) => setEditingProduct({ ...editingProduct, img: t })} validate={(v) => validateImageUrl(v)} />
                   <View style={{ flexDirection: 'row', marginTop: 12, justifyContent: 'center' }}>
                     <Pressable style={[sharedStyles.btnAdd, { flex: 1 }]} onPress={() => editingProduct && saveProduct(editingProduct)}><Text style={sharedStyles.btnAddText}>Guardar</Text></Pressable>
                     <Pressable style={[sharedStyles.btnDanger, { flex: 1 }]} onPress={() => { setShowProductModal(false); setEditingProduct(null); }}><Text style={sharedStyles.btnDangerText}>Cancelar</Text></Pressable>
@@ -958,19 +1040,8 @@ export default function EmpleadoPage() {
               <Text style={sharedStyles.modalTitle}>Gestionar Usuario</Text>
               {editingUser && (
                 <View>
-                  <InputValidado
-                    label="Nombre *"
-                    value={editingUser.name}
-                    onChangeText={(t) => setEditingUser({ ...editingUser, name: t })}
-                    validate={(v) => validateOnlyLetters(v, 'El nombre')}
-                  />
-                  <InputValidado
-                    label="Email *"
-                    value={editingUser.email}
-                    onChangeText={(t) => setEditingUser({ ...editingUser, email: t })}
-                    keyboardType="email-address"
-                    validate={(v) => validateEmail(v)}
-                  />
+                  <InputValidado label="Nombre *" value={editingUser.name} onChangeText={(t) => setEditingUser({ ...editingUser, name: t })} validate={(v) => validateOnlyLetters(v, 'El nombre')} />
+                  <InputValidado label="Email *" value={editingUser.email} onChangeText={(t) => setEditingUser({ ...editingUser, email: t })} keyboardType="email-address" validate={(v) => validateEmail(v)} />
                   <Text style={sharedStyles.inputLabel}>Rol *</Text>
                   <View style={{ flexDirection: 'row', marginTop: 6 }}>
                     {['admin', 'cliente', 'empleado'].map((r) => (
@@ -1007,44 +1078,12 @@ export default function EmpleadoPage() {
               <Text style={sharedStyles.modalTitle}>{editingProveedor && editingProveedor.id ? 'Editar Proveedor' : 'Nuevo Proveedor'}</Text>
               {editingProveedor && (
                 <View>
-                  <InputValidado
-                    label="Nombre *"
-                    value={editingProveedor.nombre}
-                    onChangeText={(t) => setEditingProveedor({ ...editingProveedor, nombre: t })}
-                    validate={(v) => validateOnlyLetters(v, 'El nombre')}
-                  />
-                  <InputValidado
-                    label="NIT / ID Fiscal *"
-                    value={editingProveedor.nit}
-                    onChangeText={(t) => setEditingProveedor({ ...editingProveedor, nit: t })}
-                    validate={(v) => validateNit(v)}
-                  />
-                  <InputValidado
-                    label="Persona de Contacto"
-                    value={editingProveedor.contacto}
-                    onChangeText={(t) => setEditingProveedor({ ...editingProveedor, contacto: t })}
-                    validate={(v) => validateOnlyLetters(v, 'El contacto')}
-                  />
-                  <InputValidado
-                    label="Dirección"
-                    value={editingProveedor.direccion}
-                    onChangeText={(t) => setEditingProveedor({ ...editingProveedor, direccion: t })}
-                    validate={() => ({ isValid: true, message: '' })}
-                  />
-                  <InputValidado
-                    label="Teléfono"
-                    value={editingProveedor.telefono}
-                    onChangeText={(t) => setEditingProveedor({ ...editingProveedor, telefono: t })}
-                    keyboardType="phone-pad"
-                    validate={(v) => validatePhone(v)}
-                  />
-                  <InputValidado
-                    label="Correo Electrónico"
-                    value={editingProveedor.email}
-                    onChangeText={(t) => setEditingProveedor({ ...editingProveedor, email: t })}
-                    keyboardType="email-address"
-                    validate={(v) => validateEmail(v)}
-                  />
+                  <InputValidado label="Nombre *" value={editingProveedor.nombre} onChangeText={(t) => setEditingProveedor({ ...editingProveedor, nombre: t })} validate={(v) => validateOnlyLetters(v, 'El nombre')} />
+                  <InputValidado label="NIT / ID Fiscal *" value={editingProveedor.nit} onChangeText={(t) => setEditingProveedor({ ...editingProveedor, nit: t })} validate={(v) => validateNit(v)} />
+                  <InputValidado label="Persona de Contacto" value={editingProveedor.contacto} onChangeText={(t) => setEditingProveedor({ ...editingProveedor, contacto: t })} validate={(v) => validateOnlyLetters(v, 'El contacto')} />
+                  <InputValidado label="Dirección" value={editingProveedor.direccion} onChangeText={(t) => setEditingProveedor({ ...editingProveedor, direccion: t })} validate={() => ({ isValid: true, message: '' })} />
+                  <InputValidado label="Teléfono" value={editingProveedor.telefono} onChangeText={(t) => setEditingProveedor({ ...editingProveedor, telefono: t })} keyboardType="phone-pad" validate={(v) => validatePhone(v)} />
+                  <InputValidado label="Correo Electrónico" value={editingProveedor.email} onChangeText={(t) => setEditingProveedor({ ...editingProveedor, email: t })} keyboardType="email-address" validate={(v) => validateEmail(v)} />
                   <Text style={sharedStyles.inputLabel}>Estado</Text>
                   <View style={{ flexDirection: 'row', marginTop: 6 }}>
                     {['Activo', 'Inactivo'].map((e) => (
@@ -1063,7 +1102,55 @@ export default function EmpleadoPage() {
           </View>
         </Modal>
 
+        {/* Edit Profile Modal */}
+        <EditProfileForm
+          visible={showProfileModal}
+          onClose={() => setShowProfileModal(false)}
+          currentUser={profileUser}
+          onUserUpdated={(updatedUser) => {
+            setProfileUser(updatedUser);
+            showMsg('Perfil actualizado', 'success');
+          }}
+          showToast={(msg) => showMsg(msg, 'success')}
+        />
+
       </ScrollView>
     </SafeAreaView>
   );
 }
+
+// ---- MOBILE-FRIENDLY CARD STYLES for Empleado ----
+const eStyles = StyleSheet.create({
+  card: {
+    backgroundColor: '#fff',
+    borderRadius: 18,
+    padding: 16,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#f0dcea',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 4,
+  },
+  cardRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
+  cardImg: { width: 56, height: 56, borderRadius: 12, backgroundColor: '#fdeef7', marginRight: 12 },
+  cardInfo: { flex: 1 },
+  cardTitle: { fontWeight: '900', color: '#2c2c2c', fontSize: 15, marginBottom: 2 },
+  cardSubtitle: { color: '#888', fontSize: 13, marginBottom: 4 },
+  cardSmall: { color: '#888', fontSize: 12, marginBottom: 2 },
+  cardBadgeRow: { flexDirection: 'row', alignItems: 'center', marginTop: 4, gap: 8 },
+  cardBadge: { paddingHorizontal: 10, paddingVertical: 3, borderRadius: 10 },
+  cardBadgeText: { color: '#fff', fontWeight: '800', fontSize: 10 },
+  cardStock: { fontWeight: '800', fontSize: 12 },
+  cardDetails: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 8, borderTopWidth: 1, borderTopColor: '#f0e6ef', marginTop: 8 },
+  cardDetailItem: { alignItems: 'center' },
+  cardDetailLabel: { color: '#aaa', fontSize: 10, fontWeight: '700', marginBottom: 2 },
+  cardDetailValue: { color: '#2c2c2c', fontWeight: '800', fontSize: 13 },
+  cardActions: { flexDirection: 'row', marginTop: 10, gap: 10 },
+  cardBtn: { backgroundColor: '#0d6efd', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 12, flex: 1, alignItems: 'center' },
+  cardBtnText: { color: '#fff', fontWeight: '900', fontSize: 13 },
+  cardStatus: { fontWeight: '800', fontSize: 13, marginTop: 4 },
+  roleBadge: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+});
